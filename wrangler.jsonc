@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "exco",
+  "main": "src/index.tsx",
+  "compatibility_date": "2025-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "account_id": "2f3a54283c593ca9fb546474ca1e5c68",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "exco-db",
+      "database_id": "1c3b3ddb-c6a8-41b7-a8b4-ca40071e05c0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "exco-uploads"
+    }
+  ]
+  // Secrets (set via `wrangler secret put`): SITE_PASSWORD, SESSION_SECRET
+  // Custom domain (exco.elula.online) is configured under Phase 3.
+}

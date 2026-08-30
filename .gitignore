@@ -1,0 +1,14 @@
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+dist/
+*.log
+.DS_Store
+.env
+
+# Business data files — never commit to the code repo
+*.xlsx
+*.xls
+*.csv
+data/
