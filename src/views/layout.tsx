@@ -50,8 +50,8 @@ a:hover { text-decoration: underline; }
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow);
 }
-.grid { display: grid; gap: 18px; }
-@media (min-width: 720px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } }
+div.grid { display: grid; gap: 18px; }
+@media (min-width: 720px) { div.grid-3 { grid-template-columns: repeat(3, 1fr); } }
 label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
 input[type=password], input[type=text] {
   width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
@@ -82,7 +82,7 @@ h3 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; t
 
 /* Tables */
 .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-table.grid { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.grid { display: table; gap: 0; border-collapse: collapse; width: 100%; font-size: 13px; }
 table.grid th, table.grid td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
 table.grid th:first-child, table.grid td:first-child { text-align: left; position: sticky; left: 0; background: var(--panel); z-index: 1; }
 table.grid thead th { background: var(--panel-2); color: var(--muted); font-weight: 600; position: sticky; top: 0; }
