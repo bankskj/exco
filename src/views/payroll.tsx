@@ -26,7 +26,7 @@ export type PayrollReport = {
   totalNett: number;
 };
 
-export function buildPayrollReport(employees: Employee[], entries: PayrollEntry[]): PayrollReport {
+export function buildPayrollReport(employees: Employee[], entries: PayrollEntry[], selected?: string | null): PayrollReport {
   const periodsSet = new Set<string>();
   const matrix = new Map<string, Map<string, { gross: number; paye: number }>>();
   for (const e of entries) {
@@ -39,7 +39,8 @@ export function buildPayrollReport(employees: Employee[], entries: PayrollEntry[
   for (const p of periods) monthly.set(p, zero());
   for (const e of entries) add(monthly.get(e.period)!, e.gross, e.paye);
 
-  const latest = maxPeriod(periods);
+  // Reporting month: the selected one if it has data, else the latest captured.
+  const latest = selected && periodsSet.has(selected) ? selected : maxPeriod(periods);
   const idx = latest ? periods.indexOf(latest) : -1;
   const prev = idx > 0 ? periods[idx - 1] : null;
   const latestTot = latest ? monthly.get(latest)! : zero();
@@ -111,14 +112,25 @@ export const PayrollReportPage: FC<{ employees: Employee[]; report: PayrollRepor
           </div>
         </div>
 
-        <SubNav active="report" />
+        <div class="row spread" style="align-items:center">
+          <SubNav active="report" />
+          <form method="get" action="/app/payroll" class="row" style="gap:8px;margin-top:14px">
+            <label style="margin:0">Month</label>
+            <select name="m" onchange="this.form.submit()" style="width:auto;padding:8px 12px">
+              {[...report.periods].reverse().map((p) => (
+                <option value={p} selected={p === report.latest}>{label(p)}</option>
+              ))}
+            </select>
+            <noscript><button class="btn btn-sm" type="submit">Go</button></noscript>
+          </form>
+        </div>
 
         <div class="kpis section-block">
           <Kpi label={`Nett — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTot.nett)}
             sub={report.prevTot.nett ? `${momNett >= 0 ? "▲" : "▼"} ${formatZAR(Math.abs(momNett))} vs prev` : "take-home paid"}
             tone={momNett > 0 ? "neg" : "pos"} />
-          <Kpi label="Gross (latest)" value={formatZAR(report.latestTot.gross)} sub={`${report.headcountPaid} paid · ${active} active`} />
-          <Kpi label="PAYE (latest)" value={formatZAR(report.latestTot.paye)} sub="ZA employees only" />
+          <Kpi label={`Gross — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTot.gross)} sub={`${report.headcountPaid} paid · ${active} active`} />
+          <Kpi label={`PAYE — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTot.paye)} sub="ZA employees only" />
           <Kpi label="Total nett captured" value={formatZAR(report.totalNett)} sub={`${report.periods.length} months`} />
         </div>
 

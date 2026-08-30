@@ -82,7 +82,9 @@ async function loadPayroll(db: D1Database) {
 }
 
 app.get("/app/payroll", async (c) => {
-  const { employees, report } = await loadPayroll(c.env.DB);
+  const [employees, entries] = await Promise.all([listEmployees(c.env.DB), listPayrollEntries(c.env.DB)]);
+  const m = c.req.query("m");
+  const report = buildPayrollReport(employees, entries, m && isPeriod(m) ? m : null);
   return c.html(<PayrollReportPage employees={employees} report={report} />);
 });
 
