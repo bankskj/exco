@@ -258,7 +258,14 @@ export const PayrollCapturePage: FC<{
         </div>
 
         {metric === "paye" ? (
-          <div class="callout section-block">Only <strong>ZA</strong> employees have PAYE. Rows for International/Freelancer are disabled.</div>
+          <div class="callout section-block row spread">
+            <span>Only <strong>ZA</strong> employees have PAYE. Greyed numbers are each person's <strong>default PAYE</strong> — type over to override, or fill them in bulk.</span>
+            <form method="post" action="/app/payroll/paye/fill" style="margin:0">
+              <input type="hidden" name="from" value={from} />
+              <input type="hidden" name="months" value={String(months)} />
+              <button class="btn btn-sm" type="submit">Fill blanks with defaults</button>
+            </form>
+          </div>
         ) : metric === "nett" ? (
           <div class="callout section-block">Nett = Gross − PAYE. This view is read-only — edit Gross or PAYE to change it.</div>
         ) : null}
@@ -298,9 +305,11 @@ export const PayrollCapturePage: FC<{
                         if (payeDisabled) return <td class="muted" style="text-align:center">n/a</td>;
                         const v = c ? (metric === "gross" ? c.gross : c.paye) : undefined;
                         const nm = `${metric === "gross" ? "g" : "t"}_${e.id}_${p}`;
+                        // PAYE cells hint the employee default when the month was paid but no PAYE captured.
+                        const hint = metric === "paye" && (!v || v === 0) && c && c.gross > 0 && e.paye_default > 0 ? String(e.paye_default) : "";
                         return (
                           <td>
-                            <input type="text" inputmode="decimal" name={nm} value={v != null && v !== 0 ? String(v) : ""} autocomplete="off" />
+                            <input type="text" inputmode="decimal" name={nm} value={v != null && v !== 0 ? String(v) : ""} placeholder={hint} autocomplete="off" />
                           </td>
                         );
                       })}
@@ -339,30 +348,47 @@ const EmployeeManager: FC<{ employees: Employee[] }> = ({ employees }) => (
         <select name="type">{EMPLOYEE_TYPES.map((t) => <option value={t}>{TYPE_LABEL[t]}</option>)}</select>
       </div>
       <div><label>Mentor / Director</label><input type="text" name="mentor" /></div>
-      <div><label>CTC (monthly)</label><input type="text" inputmode="decimal" name="ctc" /></div>
+      <div><label>CTC / gross (monthly)</label><input type="text" inputmode="decimal" name="ctc" /></div>
+      <div><label>Default PAYE (ZA only)</label><input type="text" inputmode="decimal" name="paye_default" /></div>
       <div><label>Status</label>
         <select name="status"><option value="active">active</option><option value="inactive">inactive</option></select>
       </div>
       <div><button class="btn btn-primary" type="submit">Add employee</button></div>
     </form>
+
+    {/* Bulk-edit form: inputs below associate via form="empbulk" so per-row
+        Delete forms don't nest inside it (nested forms are invalid HTML). */}
+    <form id="empbulk" method="post" action="/app/payroll/employees/save"></form>
     <div class="tablewrap">
       <table class="grid">
-        <thead><tr><th>Name</th><th>Type</th><th>Mentor</th><th>CTC</th><th>Status</th><th></th></tr></thead>
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Mentor</th><th>CTC / gross</th><th>Default PAYE</th><th>Default nett</th><th>Status</th><th></th></tr>
+        </thead>
         <tbody>
           {employees.map((e) => (
             <tr>
-              <td>{e.name}</td>
+              <td><input form="empbulk" type="text" name={`en_${e.id}`} value={e.name} style="text-align:left;width:150px" /></td>
               <td>
-                <form method="post" action="/app/payroll/employee/type" style="margin:0">
-                  <input type="hidden" name="id" value={e.id} />
-                  <select name="type" onchange="this.form.submit()" style="padding:4px 8px;font-size:12px;width:auto">
-                    {EMPLOYEE_TYPES.map((t) => <option value={t} selected={e.type === t}>{TYPE_LABEL[t]}</option>)}
-                  </select>
-                </form>
+                <select form="empbulk" name={`et_${e.id}`} style="padding:4px 8px;font-size:12px;width:auto">
+                  {EMPLOYEE_TYPES.map((t) => <option value={t} selected={e.type === t}>{TYPE_LABEL[t]}</option>)}
+                </select>
               </td>
-              <td class="muted">{e.mentor || "—"}</td>
-              <td class="num">{e.ctc != null ? formatZAR(e.ctc) : "—"}</td>
-              <td>{e.status}</td>
+              <td><input form="empbulk" type="text" name={`em_${e.id}`} value={e.mentor ?? ""} style="text-align:left;width:100px" /></td>
+              <td><input form="empbulk" type="text" inputmode="decimal" name={`ec_${e.id}`} value={e.ctc != null ? String(e.ctc) : ""} /></td>
+              <td>
+                {hasPaye(e.type) ? (
+                  <input form="empbulk" type="text" inputmode="decimal" name={`ep_${e.id}`} value={e.paye_default ? String(e.paye_default) : ""} />
+                ) : (
+                  <span class="muted">n/a</span>
+                )}
+              </td>
+              <td class="num muted">{e.ctc != null ? formatZAR(e.ctc - (hasPaye(e.type) ? e.paye_default : 0)) : "—"}</td>
+              <td>
+                <select form="empbulk" name={`es_${e.id}`} style="padding:4px 8px;font-size:12px;width:auto">
+                  <option value="active" selected={e.status === "active"}>active</option>
+                  <option value="inactive" selected={e.status === "inactive"}>inactive</option>
+                </select>
+              </td>
               <td>
                 <form method="post" action="/app/payroll/employee/delete" style="margin:0"
                   onsubmit="return confirm('Delete this employee and all their pay records?')">
@@ -374,6 +400,12 @@ const EmployeeManager: FC<{ employees: Employee[] }> = ({ employees }) => (
           ))}
         </tbody>
       </table>
+    </div>
+    <div class="toolbar">
+      <button form="empbulk" class="btn btn-primary" type="submit">Save employees</button>
+      <span class="muted" style="font-size:12px">
+        Default nett = CTC − default PAYE. Monthly PAYE in the grid pre-fills from the default; per-month values always win.
+      </span>
     </div>
   </div>
 );

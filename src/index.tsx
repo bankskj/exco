@@ -12,8 +12,10 @@ import {
   upsertPayrollField,
   pruneEmptyEntries,
   createEmployee,
+  updateEmployee,
   deleteEmployee,
   setEmployeeType,
+  fillPayeFromDefaults,
   EMPLOYEE_TYPES,
 } from "./data/payroll";
 import {
@@ -143,10 +145,45 @@ app.post("/app/payroll/employee", async (c) => {
       type,
       mentor: String(b.mentor ?? "").trim() || null,
       ctc: b.ctc ? parseMoney(String(b.ctc)) : null,
+      paye_default: b.paye_default ? parseMoney(String(b.paye_default)) : 0,
       status: String(b.status ?? "active"),
     });
   }
   return c.redirect("/app/payroll/capture");
+});
+
+app.post("/app/payroll/employees/save", async (c) => {
+  const b = await c.req.parseBody();
+  const employees = await listEmployees(c.env.DB);
+  for (const e of employees) {
+    const name = b[`en_${e.id}`];
+    if (typeof name !== "string") continue; // row not present in this submit
+    const trimmedName = name.trim();
+    if (!trimmedName) continue; // never blank a name
+    const type = EMPLOYEE_TYPES.includes(String(b[`et_${e.id}`]) as any) ? String(b[`et_${e.id}`]) : e.type;
+    const mentor = String(b[`em_${e.id}`] ?? "").trim() || null;
+    const ctcRaw = String(b[`ec_${e.id}`] ?? "").trim();
+    const ctc = ctcRaw === "" ? null : parseMoney(ctcRaw);
+    const payeRaw = String(b[`ep_${e.id}`] ?? "").trim();
+    const paye_default = payeRaw === "" ? 0 : parseMoney(payeRaw);
+    const status = String(b[`es_${e.id}`]) === "inactive" ? "inactive" : "active";
+    const changed =
+      trimmedName !== e.name || type !== e.type || mentor !== (e.mentor ?? null) ||
+      (ctc ?? null) !== (e.ctc ?? null) || paye_default !== e.paye_default || status !== e.status;
+    if (changed) {
+      await updateEmployee(c.env.DB, e.id, { name: trimmedName, mentor, ctc, paye_default, type, status });
+    }
+  }
+  return c.redirect("/app/payroll/capture?saved=1");
+});
+
+app.post("/app/payroll/paye/fill", async (c) => {
+  const b = await c.req.parseBody();
+  const from = isPeriod(String(b.from)) ? String(b.from) : "2026-01";
+  const monthsN = Number(b.months);
+  const months = Number.isFinite(monthsN) ? Math.max(1, Math.min(24, Math.trunc(monthsN))) : 14;
+  await fillPayeFromDefaults(c.env.DB, seq(from, months));
+  return c.redirect(`/app/payroll/capture?metric=paye&from=${from}&months=${months}&saved=1`);
 });
 
 app.post("/app/payroll/employee/type", async (c) => {
