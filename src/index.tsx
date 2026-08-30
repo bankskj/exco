@@ -9,9 +9,12 @@ import { CashflowEditor, type EntryMap } from "./views/cashflow_edit";
 import {
   listEmployees,
   listPayrollEntries,
-  upsertPayrollEntry,
+  upsertPayrollField,
+  pruneEmptyEntries,
   createEmployee,
   deleteEmployee,
+  setEmployeeType,
+  EMPLOYEE_TYPES,
 } from "./data/payroll";
 import {
   listCategories,
@@ -84,20 +87,26 @@ app.get("/app/payroll/capture", async (c) => {
   const from = fromRaw && isPeriod(fromRaw) ? fromRaw : defaultFrom;
   const monthsRaw = Number(c.req.query("months"));
   const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(24, Math.trunc(monthsRaw))) : 14;
+  const mRaw = c.req.query("metric");
+  const metric = mRaw === "paye" || mRaw === "nett" ? mRaw : "gross";
   const gridPeriods = seq(from, months);
   return c.html(
-    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} saved={c.req.query("saved") === "1"} />,
+    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} metric={metric} saved={c.req.query("saved") === "1"} />,
   );
 });
 
 app.post("/app/payroll/save", async (c) => {
   const body = await c.req.parseBody();
+  // Nett is derived, never saved. Save whichever field the grid was showing.
+  const field = String(body.metric) === "paye" ? "paye" : "gross";
+  const prefix = field === "gross" ? "g_" : "t_";
   const current = await listPayrollEntries(c.env.DB);
   const cur = new Map<string, number>();
-  for (const e of current) cur.set(`${e.employee_id}|${e.period}`, e.amount);
+  for (const e of current) cur.set(`${e.employee_id}|${e.period}`, field === "gross" ? e.gross : e.paye);
 
+  let changed = false;
   for (const [key, raw] of Object.entries(body)) {
-    if (!key.startsWith("c_") || typeof raw !== "string") continue;
+    if (!key.startsWith(prefix) || typeof raw !== "string") continue;
     const rest = key.slice(2);
     const idx = rest.lastIndexOf("_");
     const employeeId = rest.slice(0, idx);
@@ -105,25 +114,37 @@ app.post("/app/payroll/save", async (c) => {
     if (!isPeriod(period)) continue;
     const trimmed = raw.trim();
     const newVal = trimmed === "" ? null : parseMoney(trimmed);
-    const oldVal = cur.get(`${employeeId}|${period}`);
-    if (newVal == null && oldVal == null) continue;
-    if (newVal != null && oldVal != null && Math.abs(newVal - oldVal) < 0.005) continue;
-    await upsertPayrollEntry(c.env.DB, employeeId, period, newVal);
+    const oldVal = cur.get(`${employeeId}|${period}`) ?? 0;
+    if ((newVal ?? 0) === oldVal) continue;
+    if (newVal != null && Math.abs(newVal - oldVal) < 0.005) continue;
+    await upsertPayrollField(c.env.DB, employeeId, period, field, newVal);
+    changed = true;
   }
-  return c.redirect("/app/payroll/capture?saved=1");
+  if (changed) await pruneEmptyEntries(c.env.DB);
+  return c.redirect(`/app/payroll/capture?metric=${field}&saved=1`);
 });
 
 app.post("/app/payroll/employee", async (c) => {
   const b = await c.req.parseBody();
   const name = String(b.name ?? "").trim();
+  const type = EMPLOYEE_TYPES.includes(String(b.type) as any) ? String(b.type) : "za";
   if (name) {
     await createEmployee(c.env.DB, {
       name,
+      type,
       mentor: String(b.mentor ?? "").trim() || null,
       ctc: b.ctc ? parseMoney(String(b.ctc)) : null,
       status: String(b.status ?? "active"),
     });
   }
+  return c.redirect("/app/payroll/capture");
+});
+
+app.post("/app/payroll/employee/type", async (c) => {
+  const b = await c.req.parseBody();
+  const id = String(b.id ?? "");
+  const type = EMPLOYEE_TYPES.includes(String(b.type) as any) ? String(b.type) : "za";
+  if (id) await setEmployeeType(c.env.DB, id, type);
   return c.redirect("/app/payroll/capture");
 });
 
@@ -136,21 +157,21 @@ app.post("/app/payroll/employee/delete", async (c) => {
 
 app.get("/app/payroll/export.csv", async (c) => {
   const { employees, report } = await loadPayroll(c.env.DB);
-  const periods = report.periods;
-  const head = ["Employee", "Mentor", ...periods.map(label), "Total"];
-  const lines = [head.map(csv).join(",")];
+  // Long format: one row per employee-month with gross/PAYE/nett — best for analysis.
+  const head = ["Employee", "Type", "Mentor", "Month", "Gross", "PAYE", "Nett"];
+  const lines = [head.join(",")];
   for (const e of employees) {
     const row = report.matrix.get(e.id);
-    let total = 0;
-    const cells = periods.map((p) => {
-      const v = row?.get(p) ?? 0;
-      total += v;
-      return v ? v.toFixed(2) : "";
-    });
-    lines.push([csv(e.name), csv(e.mentor ?? ""), ...cells, total.toFixed(2)].join(","));
+    if (!row) continue;
+    for (const p of report.periods) {
+      const cell = row.get(p);
+      if (!cell || (cell.gross === 0 && cell.paye === 0)) continue;
+      const nett = cell.gross - cell.paye;
+      lines.push(
+        [csv(e.name), e.type, csv(e.mentor ?? ""), p, cell.gross.toFixed(2), cell.paye.toFixed(2), nett.toFixed(2)].join(","),
+      );
+    }
   }
-  const totals = periods.map((p) => (report.monthlyTotal.get(p) ?? 0).toFixed(2));
-  lines.push(["Total", "", ...totals, report.ytdTotal.toFixed(2)].map(csv).join(","));
   return csvResponse(c, "payroll.csv", lines.join("\n"));
 });
 

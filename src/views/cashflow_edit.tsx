@@ -69,7 +69,11 @@ export const CashflowEditor: FC<{
 
         <form method="post" action="/app/accounts/save">
           <div class="tablewrap section-block">
-            <table class="grid">
+            <table class="grid fixed" style={`min-width:${220 + periods.length * 104}px`}>
+              <colgroup>
+                <col style="width:220px" />
+                {periods.map(() => <col style="width:104px" />)}
+              </colgroup>
               <thead>
                 <tr>
                   <th>Line item</th>

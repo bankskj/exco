@@ -34,11 +34,13 @@ for r in range(2, 36):  # rows 2..35 = the 34 real employees
     ctc = float(ctc) if isinstance(ctc,(int,float)) else "NULL"
     eid = str(uuid.uuid4()); emp_count += 1
     mentor_sql = q(str(mentor).strip()) if mentor and str(mentor).strip() else "NULL"
-    out.append(f"INSERT INTO employees (id,name,mentor,ctc,status,sort_order) VALUES ({q(eid)},{q(str(name).strip())},{mentor_sql},{ctc if ctc!='NULL' else 'NULL'},'active',{emp_count});")
+    # All imported employees default to type 'za'; classify international/freelancer in-app.
+    out.append(f"INSERT INTO employees (id,name,mentor,ctc,type,status,sort_order) VALUES ({q(eid)},{q(str(name).strip())},{mentor_sql},{ctc if ctc!='NULL' else 'NULL'},'za','active',{emp_count});")
     for (c, pp) in month_cols:
         v = ws.cell(r,c).value
         if isinstance(v,(int,float)):
-            out.append(f"INSERT INTO payroll_entries (id,employee_id,period,amount) VALUES ({q(str(uuid.uuid4()))},{q(eid)},{q(pp)},{float(v)});")
+            # Sheet figures are gross/CTC; PAYE is captured in-app (defaults 0).
+            out.append(f"INSERT INTO payroll_entries (id,employee_id,period,gross,paye) VALUES ({q(str(uuid.uuid4()))},{q(eid)},{q(pp)},{float(v)},0);")
             pay_count += 1
 
 # ---------------- CASHFLOW ----------------
