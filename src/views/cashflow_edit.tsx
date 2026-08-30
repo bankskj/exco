@@ -2,7 +2,8 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import type { CFCategory, CFSettings, Forecast } from "../lib/forecast";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel } from "../lib/period";
+import { label, shortLabel, fiscalYearOf } from "../lib/period";
+import { FySelector } from "./cashflow";
 
 export type EntryMap = Map<string, Map<string, { amount: number; status: string }>>;
 
@@ -12,8 +13,10 @@ export const CashflowEditor: FC<{
   forecast: Forecast;
   settings: CFSettings;
   actualsThrough: string;
-}> = ({ categories, entries, forecast, settings, actualsThrough }) => {
-  const periods = forecast.timeline;
+  fys: number[];
+  fy: number | null;
+}> = ({ categories, entries, forecast, settings, actualsThrough, fys, fy }) => {
+  const periods = fy == null ? forecast.timeline : forecast.timeline.filter((p) => fiscalYearOf(p) === fy);
   const income = categories.filter((c) => c.kind === "income");
   const cost = categories.filter((c) => c.kind === "cost");
   const colByPeriod = new Map(forecast.base.map((c) => [c.period, c]));
@@ -60,6 +63,10 @@ export const CashflowEditor: FC<{
           </div>
         </div>
 
+        <div class="section-block">
+          <FySelector base="/app/accounts/edit" fys={fys} fy={fy} />
+        </div>
+
         <div class="callout section-block">
           <strong>How the forecast works.</strong> Months up to <strong>{label(actualsThrough)}</strong> are
           <em> actuals</em>. After that, each line is projected: <span class="badge recurring">recurring</span> lines
@@ -68,6 +75,7 @@ export const CashflowEditor: FC<{
         </div>
 
         <form method="post" action="/app/accounts/save">
+          {fy != null ? <input type="hidden" name="fy" value={String(fy)} /> : null}
           <div class="tablewrap section-block">
             <table class="grid fixed" style={`min-width:${220 + periods.length * 104}px`}>
               <colgroup>

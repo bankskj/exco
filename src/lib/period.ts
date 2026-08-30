@@ -55,6 +55,28 @@ export function shortLabel(period: string): string {
   return `${MONTHS[month - 1]} '${String(year).slice(2)}`;
 }
 
+// --- Fiscal year (South African convention: March → end February) ---------
+// FY2026 = 2025-03 .. 2026-02. A period belongs to the FY it ends in.
+
+export function fiscalYearOf(period: string): number {
+  const { year, month } = splitPeriod(period);
+  return month >= 3 ? year + 1 : year;
+}
+
+/** The 12 periods of a fiscal year, Mar..Feb. */
+export function fiscalYearPeriods(fy: number): string[] {
+  return seq(`${fy - 1}-03`, 12);
+}
+
+export function fyLabel(fy: number): string {
+  return `FY${String(fy).slice(2)}`;
+}
+
+/** 'Mar 25 – Feb 26' */
+export function fyRangeLabel(fy: number): string {
+  return `Mar '${String(fy - 1).slice(2)} – Feb '${String(fy).slice(2)}`;
+}
+
 export function comparePeriod(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }

@@ -2,8 +2,23 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import type { CFCategory, CFSettings, Forecast } from "../lib/forecast";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel } from "../lib/period";
+import { label, shortLabel, fiscalYearOf, fyLabel, fyRangeLabel } from "../lib/period";
 import { lineChart, comboBars, hBars } from "../lib/charts";
+
+/** Fiscal-year (Mar–Feb) selector. fy=null means the full timeline. */
+export const FySelector: FC<{ base: string; fys: number[]; fy: number | null }> = ({ base, fys, fy }) => (
+  <div class="row" style="gap:10px;align-items:center">
+    <div class="segmented">
+      <a href={base} class={fy == null ? "seg active" : "seg"}>All</a>
+      {fys.map((y) => (
+        <a href={`${base}${base.includes("?") ? "&" : "?"}fy=${y}`} class={fy === y ? "seg active" : "seg"} title={fyRangeLabel(y)}>
+          {fyLabel(y)}
+        </a>
+      ))}
+    </div>
+    {fy != null ? <span class="muted" style="font-size:12px">{fyRangeLabel(fy)}</span> : null}
+  </div>
+);
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -29,16 +44,22 @@ export const CashflowDashboard: FC<{
   forecast: Forecast;
   categories: CFCategory[];
   settings: CFSettings;
+  fys: number[];
+  fy: number | null;
   saved?: boolean;
-}> = ({ forecast, categories, settings, saved }) => {
+}> = ({ forecast, categories, settings, fys, fy, saved }) => {
   const rw = runwayText(forecast);
   const net = forecast.kpis.avgMonthlyNet;
-  const balanceLine = forecast.scenarios.base.columns.map((c) => ({
-    label: shortLabel(c.period),
-    value: c.balance,
-    forecast: c.isForecast,
-  }));
-  const combo = forecast.base.map((c) => ({
+  const inFy = (p: string) => fy == null || fiscalYearOf(p) === fy;
+  const visibleCols = forecast.base.filter((c) => inFy(c.period));
+  const balanceLine = forecast.scenarios.base.columns
+    .filter((c) => inFy(c.period))
+    .map((c) => ({
+      label: shortLabel(c.period),
+      value: c.balance,
+      forecast: c.isForecast,
+    }));
+  const combo = visibleCols.map((c) => ({
     label: shortLabel(c.period),
     income: c.income,
     cost: c.cost,
@@ -76,14 +97,16 @@ export const CashflowDashboard: FC<{
             </p>
           </div>
           <div class="row">
-            <a class="btn btn-sm" href="/app/accounts/export.csv">⬇ Export CSV</a>
-            <a class="btn btn-sm btn-primary" href="/app/accounts/edit">Edit &amp; forecast</a>
+            <a class="btn btn-sm" href={fy != null ? `/app/accounts/export.csv?fy=${fy}` : "/app/accounts/export.csv"}>⬇ Export CSV</a>
+            <a class="btn btn-sm btn-primary" href={fy != null ? `/app/accounts/edit?fy=${fy}` : "/app/accounts/edit"}>Edit &amp; forecast</a>
           </div>
         </div>
 
         {saved ? <div class="callout" style="margin-bottom:16px">✓ Saved.</div> : null}
 
-        <div class="kpis">
+        <FySelector base="/app/accounts" fys={fys} fy={fy} />
+
+        <div class="kpis section-block">
           <Kpi label="Cash on hand" value={formatZAR(forecast.kpis.currentCash)} sub={`As at ${latest ? label(latest) : "—"}`}
             tone={forecast.kpis.currentCash < 0 ? "neg" : ""} />
           <Kpi label={net >= 0 ? "Avg monthly surplus" : "Avg monthly burn"} value={formatZAR(Math.abs(net))}
@@ -138,7 +161,7 @@ export const CashflowDashboard: FC<{
           </div>
         </div>
 
-        <MonthlySummary forecast={forecast} />
+        <MonthlySummary cols={visibleCols} />
       </div>
     </Layout>
   );
@@ -164,7 +187,7 @@ const ScenarioCard: FC<{ title: string; tone: string; end: number; rwPeriod: str
   </div>
 );
 
-const MonthlySummary: FC<{ forecast: Forecast }> = ({ forecast }) => (
+const MonthlySummary: FC<{ cols: Forecast["base"] }> = ({ cols }) => (
   <div class="section-block">
     <h3>Monthly summary</h3>
     <div class="tablewrap">
@@ -173,7 +196,7 @@ const MonthlySummary: FC<{ forecast: Forecast }> = ({ forecast }) => (
           <tr><th>Month</th><th>Income</th><th>Cost</th><th>Net</th><th>Cash balance</th><th></th></tr>
         </thead>
         <tbody>
-          {forecast.base.map((c) => (
+          {cols.map((c) => (
             <tr>
               <td>{label(c.period)}</td>
               <td class="num">{formatZAR(c.income)}</td>

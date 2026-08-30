@@ -2,7 +2,7 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import { type Employee, type EmployeeType, type PayrollEntry, EMPLOYEE_TYPES, TYPE_LABEL, hasPaye } from "../data/payroll";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel, maxPeriod } from "../lib/period";
+import { label, shortLabel, maxPeriod, fiscalYearOf, fyLabel, fyRangeLabel } from "../lib/period";
 import { lineChart, hBars } from "../lib/charts";
 
 type Triple = { gross: number; paye: number; nett: number };
@@ -170,6 +170,15 @@ export const PayrollReportPage: FC<{ employees: Employee[]; report: PayrollRepor
 
 type Metric = "gross" | "paye" | "nett";
 
+/** FYs spanned by the captured data, plus the next planning year. */
+function fyOptions(report: PayrollReport): number[] {
+  const fys = new Set(report.periods.map(fiscalYearOf));
+  if (fys.size === 0) return [2026, 2027];
+  const max = Math.max(...fys);
+  fys.add(max + 1);
+  return [...fys].sort((a, b) => a - b);
+}
+
 /** Capture view — metric toggle (gross/PAYE/nett), month-range control, fixed-layout grid. */
 export const PayrollCapturePage: FC<{
   employees: Employee[];
@@ -207,10 +216,24 @@ export const PayrollCapturePage: FC<{
         {saved ? <div class="callout section-block">✓ Changes saved.</div> : null}
 
         <div class="row spread section-block">
-          <div class="segmented">
-            <a href={metricLink("gross")} class={metric === "gross" ? "seg active" : "seg"}>Gross</a>
-            <a href={metricLink("paye")} class={metric === "paye" ? "seg active" : "seg"}>PAYE</a>
-            <a href={metricLink("nett")} class={metric === "nett" ? "seg active" : "seg"}>Nett</a>
+          <div class="row" style="gap:10px">
+            <div class="segmented">
+              <a href={metricLink("gross")} class={metric === "gross" ? "seg active" : "seg"}>Gross</a>
+              <a href={metricLink("paye")} class={metric === "paye" ? "seg active" : "seg"}>PAYE</a>
+              <a href={metricLink("nett")} class={metric === "nett" ? "seg active" : "seg"}>Nett</a>
+            </div>
+            <div class="segmented">
+              {fyOptions(report).map((y) => {
+                const start = `${y - 1}-03`;
+                const active = from === start && months === 12;
+                return (
+                  <a href={`/app/payroll/capture?metric=${metric}&from=${start}&months=12`}
+                    class={active ? "seg active" : "seg"} title={fyRangeLabel(y)}>
+                    {fyLabel(y)}
+                  </a>
+                );
+              })}
+            </div>
           </div>
           <form method="get" action="/app/payroll/capture" class="row" style="gap:8px">
             <input type="hidden" name="metric" value={metric} />

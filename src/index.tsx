@@ -28,7 +28,14 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel } from "./lib/period";
+
+/** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
+function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
+  const fys = [...new Set(timeline.map(fiscalYearOf))].sort((a, b) => a - b);
+  const n = Number(raw);
+  return [fys, Number.isFinite(n) && fys.includes(n) ? n : null];
+}
 
 const app = new Hono<AppEnv>();
 app.use("*", secureHeaders());
@@ -196,17 +203,19 @@ async function loadCashflow(db: D1Database) {
 
 app.get("/app/accounts", async (c) => {
   const { categories, settings, forecast } = await loadCashflow(c.env.DB);
-  return c.html(<CashflowDashboard forecast={forecast} categories={categories} settings={settings} saved={c.req.query("saved") === "1"} />);
+  const [fys, fy] = parseFy(forecast.timeline, c.req.query("fy"));
+  return c.html(<CashflowDashboard forecast={forecast} categories={categories} settings={settings} fys={fys} fy={fy} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
   const { categories, entries, settings, actualsThrough, forecast } = await loadCashflow(c.env.DB);
+  const [fys, fy] = parseFy(forecast.timeline, c.req.query("fy"));
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
     map.get(e.category_id)!.set(e.period, { amount: e.amount, status: e.period <= actualsThrough ? "actual" : "forecast" });
   }
-  return c.html(<CashflowEditor categories={categories} entries={map} forecast={forecast} settings={settings} actualsThrough={actualsThrough} />);
+  return c.html(<CashflowEditor categories={categories} entries={map} forecast={forecast} settings={settings} actualsThrough={actualsThrough} fys={fys} fy={fy} />);
 });
 
 app.post("/app/accounts/save", async (c) => {
@@ -231,7 +240,8 @@ app.post("/app/accounts/save", async (c) => {
     const status = period <= at ? "actual" : "forecast";
     await upsertEntry(c.env.DB, categoryId, period, newVal, status);
   }
-  return c.redirect("/app/accounts/edit");
+  const fyParam = /^\d{4}$/.test(String(body.fy ?? "")) ? `?fy=${body.fy}` : "";
+  return c.redirect(`/app/accounts/edit${fyParam}`);
 });
 
 app.post("/app/accounts/category", async (c) => {
@@ -278,7 +288,8 @@ app.post("/app/accounts/settings", async (c) => {
 
 app.get("/app/accounts/export.csv", async (c) => {
   const { categories, forecast } = await loadCashflow(c.env.DB);
-  const periods = forecast.timeline;
+  const [, fy] = parseFy(forecast.timeline, c.req.query("fy"));
+  const periods = fy == null ? forecast.timeline : forecast.timeline.filter((p) => fiscalYearOf(p) === fy);
   const col = new Map(forecast.base.map((x) => [x.period, x]));
   const head = ["Line item", "Type", ...periods.map(label)];
   const lines = [head.map(csv).join(",")];
