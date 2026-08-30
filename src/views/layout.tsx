@@ -117,6 +117,12 @@ input[type=number], select { width: 100%; padding: 10px 12px; border-radius: 10p
 .callout { border-left: 3px solid var(--accent); background: var(--panel-2); padding: 12px 16px; border-radius: 8px; font-size: 13px; }
 .section-block { margin-top: 26px; }
 a.subnav { margin-right: 14px; font-weight: 600; }
+
+/* Segmented control (Report / Capture) */
+.segmented { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 4px; }
+.seg { padding: 7px 18px; border-radius: 7px; font-weight: 600; font-size: 14px; color: var(--muted); }
+.seg:hover { color: var(--text); text-decoration: none; }
+.seg.active { background: var(--accent); color: #fff; }
 `;
 
 const NAV = [

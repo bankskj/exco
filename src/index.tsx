@@ -3,7 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { AppEnv } from "./types";
 import { checkPassword, startSession, endSession, isAuthed, requireAuth } from "./auth";
 import { Landing, Login, Dashboard, SectionStub } from "./views/pages";
-import { PayrollPage, buildPayrollReport } from "./views/payroll";
+import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
 import { CashflowDashboard } from "./views/cashflow";
 import { CashflowEditor, type EntryMap } from "./views/cashflow_edit";
 import {
@@ -25,7 +25,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { addMonths, isPeriod, label, seq } from "./lib/period";
+import { isPeriod, label, seq } from "./lib/period";
 
 const app = new Hono<AppEnv>();
 app.use("*", secureHeaders());
@@ -73,12 +73,20 @@ async function loadPayroll(db: D1Database) {
 
 app.get("/app/payroll", async (c) => {
   const { employees, report } = await loadPayroll(c.env.DB);
-  const gridPeriods =
-    report.periods.length > 0
-      ? [...report.periods, addMonths(report.periods[report.periods.length - 1], 1)]
-      : seq("2026-01", 12);
+  return c.html(<PayrollReportPage employees={employees} report={report} />);
+});
+
+app.get("/app/payroll/capture", async (c) => {
+  const { employees, report } = await loadPayroll(c.env.DB);
+  // Default window: the full planning year starting at the first month of data.
+  const defaultFrom = report.periods[0] ?? "2026-01";
+  const fromRaw = c.req.query("from");
+  const from = fromRaw && isPeriod(fromRaw) ? fromRaw : defaultFrom;
+  const monthsRaw = Number(c.req.query("months"));
+  const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(24, Math.trunc(monthsRaw))) : 14;
+  const gridPeriods = seq(from, months);
   return c.html(
-    <PayrollPage employees={employees} report={report} gridPeriods={gridPeriods} saved={c.req.query("saved") === "1"} />,
+    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} saved={c.req.query("saved") === "1"} />,
   );
 });
 
@@ -102,7 +110,7 @@ app.post("/app/payroll/save", async (c) => {
     if (newVal != null && oldVal != null && Math.abs(newVal - oldVal) < 0.005) continue;
     await upsertPayrollEntry(c.env.DB, employeeId, period, newVal);
   }
-  return c.redirect("/app/payroll?saved=1");
+  return c.redirect("/app/payroll/capture?saved=1");
 });
 
 app.post("/app/payroll/employee", async (c) => {
@@ -116,14 +124,14 @@ app.post("/app/payroll/employee", async (c) => {
       status: String(b.status ?? "active"),
     });
   }
-  return c.redirect("/app/payroll");
+  return c.redirect("/app/payroll/capture");
 });
 
 app.post("/app/payroll/employee/delete", async (c) => {
   const b = await c.req.parseBody();
   const id = String(b.id ?? "");
   if (id) await deleteEmployee(c.env.DB, id);
-  return c.redirect("/app/payroll");
+  return c.redirect("/app/payroll/capture");
 });
 
 app.get("/app/payroll/export.csv", async (c) => {

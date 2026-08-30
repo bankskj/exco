@@ -66,12 +66,15 @@ const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = (
   </div>
 );
 
-export const PayrollPage: FC<{
-  employees: Employee[];
-  report: PayrollReport;
-  gridPeriods: string[];
-  saved?: boolean;
-}> = ({ employees, report, gridPeriods, saved }) => {
+const SubNav: FC<{ active: "report" | "capture" }> = ({ active }) => (
+  <div class="segmented" style="margin:14px 0 4px">
+    <a href="/app/payroll" class={active === "report" ? "seg active" : "seg"}>Report</a>
+    <a href="/app/payroll/capture" class={active === "capture" ? "seg active" : "seg"}>Capture</a>
+  </div>
+);
+
+/** Report view — read-only KPIs and charts. */
+export const PayrollReportPage: FC<{ employees: Employee[]; report: PayrollReport }> = ({ employees, report }) => {
   const trend = report.periods.map((p) => ({ label: shortLabel(p), value: report.monthlyTotal.get(p) ?? 0 }));
   const mom = report.latestTotal - report.prevTotal;
   const momPct = report.prevTotal ? (mom / report.prevTotal) * 100 : 0;
@@ -83,20 +86,23 @@ export const PayrollPage: FC<{
         <div class="row spread">
           <div>
             <h1 style="margin-top:12px">Payroll</h1>
-            <p class="muted" style="margin-top:0">Capture monthly pay, track cost by team, and report trends.</p>
+            <p class="muted" style="margin-top:0">Reporting overview. Use <strong>Capture</strong> to add or edit pay.</p>
           </div>
-          <a class="btn btn-sm" href="/app/payroll/export.csv">⬇ Export CSV</a>
+          <div class="row">
+            <a class="btn btn-sm" href="/app/payroll/export.csv">⬇ Export CSV</a>
+            <a class="btn btn-sm btn-primary" href="/app/payroll/capture">Capture pay</a>
+          </div>
         </div>
 
-        {saved ? <div class="callout" style="margin-bottom:16px">✓ Changes saved.</div> : null}
+        <SubNav active="report" />
 
-        <div class="kpis">
+        <div class="kpis section-block">
           <Kpi label={`Payroll — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTotal)}
-            sub={report.prevTotal ? `${mom >= 0 ? "▲" : "▼"} ${formatZAR(Math.abs(mom))} (${momPct.toFixed(1)}%) vs prev` : undefined}
+            sub={report.prevTotal ? `${mom >= 0 ? "▲" : "▼"} ${formatZAR(Math.abs(mom))} (${momPct.toFixed(1)}%) vs prev` : "latest recorded month"}
             tone={mom > 0 ? "neg" : "pos"} />
           <Kpi label="People paid (latest)" value={String(report.headcountPaid)} sub={`${active} active employees`} />
           <Kpi label="Avg pay (latest)" value={formatZAR(report.headcountPaid ? report.latestTotal / report.headcountPaid : 0)} />
-          <Kpi label="Total captured" value={formatZAR(report.ytdTotal)} sub={`${report.periods.length} months`} />
+          <Kpi label="Total captured" value={formatZAR(report.ytdTotal)} sub={`${report.periods.length} months of data`} />
         </div>
 
         <div class="grid section-block" style="grid-template-columns: 1.6fr 1fr; gap:18px">
@@ -113,67 +119,88 @@ export const PayrollPage: FC<{
             )}
           </div>
         </div>
-
-        <PayrollGrid employees={employees} report={report} gridPeriods={gridPeriods} />
-        <EmployeeManager employees={employees} />
       </div>
     </Layout>
   );
 };
 
-const PayrollGrid: FC<{ employees: Employee[]; report: PayrollReport; gridPeriods: string[] }> = ({
-  employees,
-  report,
-  gridPeriods,
-}) => {
-  const colTotal = (p: string) =>
-    employees.reduce((sum, e) => sum + (report.matrix.get(e.id)?.get(p) ?? 0), 0);
+/** Capture view — editable grid + employee management, with a month-range control. */
+export const PayrollCapturePage: FC<{
+  employees: Employee[];
+  report: PayrollReport;
+  gridPeriods: string[];
+  from: string;
+  months: number;
+  saved?: boolean;
+}> = ({ employees, report, gridPeriods, from, months, saved }) => {
+  const colTotal = (p: string) => employees.reduce((sum, e) => sum + (report.matrix.get(e.id)?.get(p) ?? 0), 0);
   return (
-    <div class="section-block">
-      <div class="row spread">
-        <h3 style="margin:0">Capture — pay by month</h3>
-        <span class="muted" style="font-size:12px">Edit any cell, then Save. Blank = not paid.</span>
-      </div>
-      <form method="post" action="/app/payroll/save">
-        <div class="tablewrap" style="margin-top:10px">
-          <table class="grid">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Mentor</th>
-                {gridPeriods.map((p) => <th>{shortLabel(p)}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((e) => (
+    <Layout title="Payroll · Capture" authed section="payroll" wide>
+      <div class="container">
+        <div class="row spread">
+          <div>
+            <h1 style="margin-top:12px">Payroll · Capture</h1>
+            <p class="muted" style="margin-top:0">Edit any cell, then Save. Blank means not paid that month.</p>
+          </div>
+          <a class="btn btn-sm" href="/app/payroll">← Back to report</a>
+        </div>
+
+        <SubNav active="capture" />
+
+        {saved ? <div class="callout section-block">✓ Changes saved.</div> : null}
+
+        <form method="get" action="/app/payroll/capture" class="toolbar">
+          <label style="margin:0">From</label>
+          <input type="text" name="from" value={from} placeholder="YYYY-MM" style="width:120px" />
+          <label style="margin:0 0 0 8px">Show</label>
+          <input type="number" name="months" value={String(months)} min="1" max="24" style="width:80px" />
+          <span class="muted">months</span>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </form>
+
+        <form method="post" action="/app/payroll/save">
+          <div class="tablewrap">
+            <table class="grid">
+              <thead>
                 <tr>
-                  <td>{e.name}{e.status === "inactive" ? <span class="muted"> · inactive</span> : null}</td>
-                  <td class="muted">{e.mentor || "—"}</td>
-                  {gridPeriods.map((p) => {
-                    const v = report.matrix.get(e.id)?.get(p);
-                    return (
-                      <td>
-                        <input type="text" inputmode="decimal" name={`c_${e.id}_${p}`}
-                          value={v != null ? String(v) : ""} autocomplete="off" />
-                      </td>
-                    );
-                  })}
+                  <th>Employee</th>
+                  <th>Mentor</th>
+                  {gridPeriods.map((p) => <th>{shortLabel(p)}</th>)}
                 </tr>
-              ))}
-              <tr class="total">
-                <td>Total</td>
-                <td></td>
-                {gridPeriods.map((p) => <td class="num">{formatZAR(colTotal(p))}</td>)}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="toolbar">
-          <button class="btn btn-primary" type="submit">Save changes</button>
-          <input type="hidden" name="periods" value={gridPeriods.join(",")} />
-        </div>
-      </form>
-    </div>
+              </thead>
+              <tbody>
+                {employees.map((e) => (
+                  <tr>
+                    <td>{e.name}{e.status === "inactive" ? <span class="muted"> · inactive</span> : null}</td>
+                    <td class="muted">{e.mentor || "—"}</td>
+                    {gridPeriods.map((p) => {
+                      const v = report.matrix.get(e.id)?.get(p);
+                      return (
+                        <td>
+                          <input type="text" inputmode="decimal" name={`c_${e.id}_${p}`}
+                            value={v != null ? String(v) : ""} autocomplete="off" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr class="total">
+                  <td>Total</td>
+                  <td></td>
+                  {gridPeriods.map((p) => <td class="num">{formatZAR(colTotal(p))}</td>)}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="toolbar">
+            <button class="btn btn-primary" type="submit">Save changes</button>
+            <a class="btn btn-sm" href="/app/payroll/capture">Reset view</a>
+          </div>
+        </form>
+
+        <EmployeeManager employees={employees} />
+      </div>
+    </Layout>
   );
 };
 
