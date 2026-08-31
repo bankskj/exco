@@ -132,19 +132,19 @@ export const CashflowDerivedPage: FC<{
             <table class="grid">
               <thead>
                 <tr>
-                  <th style="text-align:left">Month</th><th>Income (P&amp;L)</th><th>Staff</th><th>Dev / freelance</th>
-                  <th>Other expenses</th><th>Recurring (manual)</th><th>Net</th><th>Balance</th><th></th>
+                  <th style="text-align:left">Month</th><th>Income (P&amp;L)</th><th>People (salaries + contractors)</th>
+                  <th>Other expenses</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
                 </tr>
               </thead>
               <tbody>
                 {visible.map((c) => (
                   <tr>
                     <td style="text-align:left">{label(c.month)}</td>
-                    <td class="num">{formatZAR(c.income)}</td>
-                    <td class="num">{formatZAR(c.staff)}{c.isForecast ? <span class="cellhint"> {c.staffSrc === "payroll" ? "payroll" : "avg"}</span> : null}</td>
-                    <td class="num">{formatZAR(c.dev)}{c.isForecast ? <span class="cellhint"> {c.devSrc === "payroll" ? "payroll" : "avg"}</span> : null}</td>
-                    <td class="num">{formatZAR(c.other)}</td>
+                    <td class="num">{formatZAR(c.income)}{c.isForecast ? <span class="cellhint"> {c.incomeSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
+                    <td class="num">{formatZAR(c.people)}{c.isForecast ? <span class="cellhint"> {c.peopleSrc === "manual" ? "manual" : c.peopleSrc === "payroll" ? "payroll grid" : "avg"}</span> : null}</td>
+                    <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {c.otherSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
                     <td class="num">{formatZAR(c.recurring)}</td>
+                    <td class={`num ${c.adjIncome - c.adjCost < 0 ? "neg" : ""}`}>{c.adjIncome || c.adjCost ? formatZAR(c.adjIncome - c.adjCost) : "—"}</td>
                     <td class={`num ${c.net < 0 ? "neg" : "pos"}`}>{formatZAR(c.net)}</td>
                     <td class={`num ${c.balance < 0 ? "neg" : ""}`}>{formatZAR(c.balance)}</td>
                     <td>{c.isForecast ? <span class="badge forecast">forecast</span> : <span class="badge actual">actual</span>}</td>
@@ -154,9 +154,11 @@ export const CashflowDerivedPage: FC<{
             </table>
           </div>
           <p class="muted" style="font-size:12px;margin-top:8px">
-            Actual months come from Xero's P&amp;L (matches the Income tab). Forecast staff/dev use the Payroll grid where
-            captured (tagged <em>payroll</em>), otherwise the 3-month average (tagged <em>avg</em>). Income and other
-            expenses forecast at the average of the last three complete months.
+            Actual months come from Xero's P&amp;L (matches the Income tab); <em>People</em> = salary accounts +
+            developer/contractor accounts combined, because most of the team is paid on contractor invoices — the
+            Payroll grid covers the same people, which is why it drives the forecast (tagged <em>payroll grid</em>;
+            months beyond the grid fall back to the 3-month average). Income and other expenses forecast at the
+            average of the last three complete months. The staff-vs-dev split by account lives on the Income tab.
           </p>
         </div>
 

@@ -1,189 +1,158 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
-import type { CFCategory, CFSettings, Forecast } from "../lib/forecast";
+import type { CFCategory } from "../lib/forecast";
+import type { DerivedCashflow } from "../lib/cashflow_engine";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel, fiscalYearOf } from "../lib/period";
-import { FySelector } from "./cashflow";
+import { label, shortLabel } from "../lib/period";
+import { AccountsTabs } from "./income";
 
 export type EntryMap = Map<string, Map<string, { amount: number; status: string }>>;
 
-export const CashflowEditor: FC<{
-  categories: CFCategory[];
+/**
+ * Forecast grid: the derived model's forecast months as editable columns.
+ * Override rows replace the modelled Income / People / Other values where
+ * filled (blank = model); additional rows (projects, pipeline, once-offs)
+ * add on top.
+ */
+export const ForecastGridPage: FC<{
+  cf: DerivedCashflow;
+  overrideCats: CFCategory[]; // the three fixed override rows
+  adjCats: CFCategory[]; // user-defined additional rows
   entries: EntryMap;
-  forecast: Forecast;
-  settings: CFSettings;
-  actualsThrough: string;
-  fys: number[];
-  fy: number | null;
-}> = ({ categories, entries, forecast, settings, actualsThrough, fys, fy }) => {
-  const periods = fy == null ? forecast.timeline : forecast.timeline.filter((p) => fiscalYearOf(p) === fy);
-  const income = categories.filter((c) => c.kind === "income");
-  const cost = categories.filter((c) => c.kind === "cost");
-  const colByPeriod = new Map(forecast.base.map((c) => [c.period, c]));
+  boundary: string;
+  saved?: boolean;
+}> = ({ cf, overrideCats, adjCats, entries, boundary, saved }) => {
+  const months = cf.columns.filter((c) => c.isForecast).map((c) => c.month);
+  const colByMonth = new Map(cf.columns.map((c) => [c.month, c]));
 
-  const renderRow = (cat: CFCategory) => (
-    <tr>
-      <td>
-        {cat.name}
-        {cat.is_recurring ? <span class="badge recurring" style="margin-left:6px">recurring</span> : null}
-      </td>
-      {periods.map((p) => {
-        const real = entries.get(cat.id)?.get(p);
-        const isForecast = p > actualsThrough;
-        const projected = colByPeriod.get(p)?.cells[cat.id];
-        const placeholder = !real && isForecast && projected ? String(Math.round(projected.amount)) : "";
-        return (
-          <td class={isForecast ? "fc" : ""}>
-            <input type="text" inputmode="decimal" name={`e_${cat.id}_${p}`}
-              value={real ? String(real.amount) : ""} placeholder={placeholder} autocomplete="off" />
-          </td>
-        );
-      })}
-    </tr>
-  );
-
-  const totalsRow = (kind: "income" | "cost" | "net" | "balance", cls: string) => (
-    <tr class={cls}>
-      <td>{kind === "income" ? "Total income" : kind === "cost" ? "Total cost" : kind === "net" ? "Net" : "Cash balance"}</td>
-      {periods.map((p) => {
-        const col = colByPeriod.get(p);
-        const v = col ? col[kind] : 0;
-        return <td class={`num ${(kind === "net" || kind === "balance") && v < 0 ? "neg" : ""}`}>{formatZAR(v)}</td>;
-      })}
-    </tr>
-  );
+  const modelValue = (name: string, m: string): number => {
+    const c = colByMonth.get(m);
+    if (!c) return 0;
+    if (/income/i.test(name)) return c.income;
+    if (/people/i.test(name)) return c.people;
+    return c.other;
+  };
 
   return (
-    <Layout title="Edit cashflow" authed section="accounts" wide>
+    <Layout title="Forecast grid" authed section="accounts" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <p style="margin:12px 0 0"><a href="/app/accounts">← Cashflow dashboard</a></p>
-            <h1 style="margin-top:8px">Edit &amp; forecast</h1>
+            <h1 style="margin-top:12px">Accounts · Forecast grid</h1>
+            <p class="muted" style="margin-top:0">
+              Fine-tune the months after <strong>{label(boundary)}</strong>. Blank override cells use the model
+              (greyed value); type to overwrite. Additional rows add on top — e.g. outstanding project income.
+            </p>
           </div>
+          <a class="btn btn-sm" href="/app/accounts">← Cashflow dashboard</a>
         </div>
 
-        <div class="row spread section-block" style="align-items:center">
-          <FySelector base="/app/accounts/edit" fys={fys} fy={fy} />
-          <form method="post" action="/app/accounts/actuals-through" class="row" style="gap:8px;margin:0">
-            {fy != null ? <input type="hidden" name="fy" value={String(fy)} /> : null}
-            <label style="margin:0">Actuals through</label>
-            <select name="actuals_through" style="width:auto;padding:8px 12px">
-              {forecast.timeline.map((p) => (
-                <option value={p} selected={p === actualsThrough}>{label(p)}</option>
-              ))}
-            </select>
-            <button class="btn btn-sm btn-primary" type="submit">Set</button>
-          </form>
-        </div>
+        <AccountsTabs active="grid" />
 
-        <div class="callout section-block">
-          <strong>How the forecast works.</strong> Months up to <strong>{label(actualsThrough)}</strong> are
-          <em> actuals</em> — captured figures, locked as history. Months after are <em>forecast</em>:
-          <span class="badge recurring"> recurring</span> lines carry the last actual forward, others use a
-          3-month trailing average, and a greyed number is that projection — type over any future cell to
-          override it, blank it to clear. <strong>To close a month:</strong> enter its real figures, then move
-          <em> Actuals through</em> to that month.
-        </div>
+        {saved ? <div class="callout section-block">✓ Saved — dashboard, scenarios and runway updated.</div> : null}
 
         <form method="post" action="/app/accounts/save">
-          {fy != null ? <input type="hidden" name="fy" value={String(fy)} /> : null}
           <div class="tablewrap section-block">
-            <table class="grid fixed" style={`min-width:${220 + periods.length * 104}px`}>
+            <table class="grid fixed" style={`min-width:${240 + months.length * 104}px`}>
               <colgroup>
-                <col style="width:220px" />
-                {periods.map(() => <col style="width:104px" />)}
+                <col style="width:240px" />
+                {months.map(() => <col style="width:104px" />)}
               </colgroup>
               <thead>
                 <tr>
-                  <th>Line item</th>
-                  {periods.map((p) => (
-                    <th>
-                      {shortLabel(p)}
-                      {p > actualsThrough
-                        ? <div class="cellhint" style="color:#f6c453">fcast</div>
-                        : <div class="cellhint" style="color:#6ee7b7">actual</div>}
-                    </th>
-                  ))}
+                  <th style="text-align:left">Row</th>
+                  {months.map((m) => <th>{shortLabel(m)}</th>)}
                 </tr>
               </thead>
               <tbody>
-                <tr class="group"><td colspan={periods.length + 1}>Income</td></tr>
-                {income.map(renderRow)}
-                {totalsRow("income", "total")}
-                <tr class="group"><td colspan={periods.length + 1}>Costs</td></tr>
-                {cost.map(renderRow)}
-                {totalsRow("cost", "total")}
-                {totalsRow("net", "total")}
-                {totalsRow("balance", "total")}
+                <tr class="group"><td colspan={months.length + 1}>Overrides — blank = model value</td></tr>
+                {overrideCats.map((cat) => (
+                  <tr>
+                    <td style="text-align:left">{cat.name} <span class="badge recurring">override</span></td>
+                    {months.map((m) => {
+                      const v = entries.get(cat.id)?.get(m);
+                      return (
+                        <td>
+                          <input type="text" inputmode="decimal" name={`e_${cat.id}_${m}`}
+                            value={v ? String(v.amount) : ""} placeholder={String(Math.round(modelValue(cat.name, m)))} autocomplete="off" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr class="group"><td colspan={months.length + 1}>Additional rows — projects, pipeline, once-offs</td></tr>
+                {adjCats.map((cat) => (
+                  <tr>
+                    <td style="text-align:left">
+                      {cat.name} <span class={`badge ${cat.kind}`}>{cat.kind}</span>
+                    </td>
+                    {months.map((m) => {
+                      const v = entries.get(cat.id)?.get(m);
+                      return (
+                        <td>
+                          <input type="text" inputmode="decimal" name={`e_${cat.id}_${m}`}
+                            value={v ? String(v.amount) : ""} autocomplete="off" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr class="total">
+                  <td style="text-align:left">Net (model + grid)</td>
+                  {months.map((m) => {
+                    const c = colByMonth.get(m);
+                    return <td class={`num ${c && c.net < 0 ? "neg" : ""}`}>{c ? formatZAR(c.net) : ""}</td>;
+                  })}
+                </tr>
+                <tr class="total">
+                  <td style="text-align:left">Cash balance</td>
+                  {months.map((m) => {
+                    const c = colByMonth.get(m);
+                    return <td class={`num ${c && c.balance < 0 ? "neg" : ""}`}>{c ? formatZAR(c.balance) : ""}</td>;
+                  })}
+                </tr>
               </tbody>
             </table>
           </div>
           <div class="toolbar">
-            <button class="btn btn-primary" type="submit">Save all</button>
-            <span class="muted" style="font-size:12px">Totals refresh after saving.</span>
+            <button class="btn btn-primary" type="submit">Save grid</button>
+            <span class="muted" style="font-size:12px">Totals refresh after saving. Clearing a cell returns it to the model.</span>
           </div>
         </form>
 
-        <CategoryManager categories={categories} />
-        <SettingsForm settings={settings} actualsThrough={actualsThrough} />
+        <div class="card section-block">
+          <h3>Add a row</h3>
+          <form method="post" action="/app/accounts/category" class="formgrid">
+            <div><label>Name</label><input type="text" name="name" required placeholder="e.g. Illovo project — outstanding" /></div>
+            <div><label>Type</label>
+              <select name="kind"><option value="income">income</option><option value="cost">cost</option></select>
+            </div>
+            <div><button class="btn btn-primary" type="submit">Add row</button></div>
+          </form>
+          {adjCats.length > 0 ? (
+            <div class="tablewrap" style="margin-top:14px">
+              <table class="grid">
+                <thead><tr><th style="text-align:left">Row</th><th>Type</th><th></th></tr></thead>
+                <tbody>
+                  {adjCats.map((cat) => (
+                    <tr>
+                      <td style="text-align:left">{cat.name}</td>
+                      <td><span class={`badge ${cat.kind}`}>{cat.kind}</span></td>
+                      <td>
+                        <form method="post" action="/app/accounts/category/delete" style="margin:0"
+                          onsubmit="return confirm('Delete this row and its values?')">
+                          <input type="hidden" name="id" value={cat.id} />
+                          <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+                        </form>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
       </div>
     </Layout>
   );
 };
-
-const CategoryManager: FC<{ categories: CFCategory[] }> = ({ categories }) => (
-  <div class="section-block card">
-    <h3>Line items</h3>
-    <form method="post" action="/app/accounts/category" class="formgrid" style="margin-bottom:18px">
-      <div><label>Name</label><input type="text" name="name" required /></div>
-      <div><label>Type</label>
-        <select name="kind"><option value="income">income</option><option value="cost">cost</option></select>
-      </div>
-      <div><label>Group</label><input type="text" name="grp" placeholder="e.g. Recurring income" /></div>
-      <div><label>Recurring?</label>
-        <select name="is_recurring"><option value="0">no</option><option value="1">yes — carry forward</option></select>
-      </div>
-      <div><button class="btn btn-primary" type="submit">Add line item</button></div>
-    </form>
-    <div class="tablewrap">
-      <table class="grid">
-        <thead><tr><th>Name</th><th>Type</th><th>Group</th><th>Recurring</th><th></th></tr></thead>
-        <tbody>
-          {categories.map((c) => (
-            <tr>
-              <td>{c.name}</td>
-              <td><span class={`badge ${c.kind}`}>{c.kind}</span></td>
-              <td class="muted">{c.grp || "—"}</td>
-              <td>{c.is_recurring ? "yes" : "no"}</td>
-              <td>
-                <form method="post" action="/app/accounts/category/delete" style="margin:0"
-                  onsubmit="return confirm('Delete this line item and all its values?')">
-                  <input type="hidden" name="id" value={c.id} />
-                  <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-                </form>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
-);
-
-const SettingsForm: FC<{ settings: CFSettings; actualsThrough: string }> = ({ settings, actualsThrough }) => (
-  <div class="section-block card">
-    <h3>Forecast settings</h3>
-    <form method="post" action="/app/accounts/settings" class="formgrid">
-      <div><label>Opening cash balance</label><input type="text" inputmode="decimal" name="opening_balance" value={String(settings.opening_balance)} /></div>
-      <div><label>Opening month (YYYY-MM)</label><input type="text" name="opening_period" value={settings.opening_period} /></div>
-      <div><label>Actuals locked through (YYYY-MM)</label><input type="text" name="actuals_through" value={actualsThrough} /></div>
-      <div><label>Forecast horizon (months)</label><input type="number" name="horizon_months" value={String(settings.horizon_months)} /></div>
-      <div><label>Best case · income +%</label><input type="number" name="best_income_pct" value={String(settings.best_income_pct)} /></div>
-      <div><label>Best case · cost −%</label><input type="number" name="best_cost_pct" value={String(settings.best_cost_pct)} /></div>
-      <div><label>Worst case · income −%</label><input type="number" name="worst_income_pct" value={String(settings.worst_income_pct)} /></div>
-      <div><label>Worst case · cost +%</label><input type="number" name="worst_cost_pct" value={String(settings.worst_cost_pct)} /></div>
-      <div class="full"><button class="btn btn-primary" type="submit">Save settings</button></div>
-    </form>
-  </div>
-);

@@ -34,7 +34,7 @@ import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
 import { CashflowDashboard } from "./views/cashflow";
-import { CashflowEditor, type EntryMap } from "./views/cashflow_edit";
+import { ForecastGridPage, type EntryMap } from "./views/cashflow_edit";
 import {
   listEmployees,
   listPayrollEntries,
@@ -366,44 +366,73 @@ async function loadCashflow(db: D1Database) {
   return { categories, entries, settings, actualsThrough: at, forecast };
 }
 
-app.get("/app/accounts", async (c) => {
-  const [settings, actuals, payrollEmployees, payrollEntries, allExpenses, synced] = await Promise.all([
-    getSettings(c.env.DB),
-    listCfActuals(c.env.DB),
-    listEmployees(c.env.DB),
-    listPayrollEntries(c.env.DB),
-    listExpenses(c.env.DB),
-    getMeta(c.env.DB, "cf_actuals_synced"),
+const OVERRIDE_GRP = "__override__";
+const OVERRIDE_NAMES = ["Income", "People", "Other expenses"];
+
+async function loadDerived(env: Bindings) {
+  const [settings, actuals, payrollEntries, allExpenses, categories, entries, synced] = await Promise.all([
+    getSettings(env.DB),
+    listCfActuals(env.DB),
+    listPayrollEntries(env.DB),
+    listExpenses(env.DB),
+    listCategories(env.DB),
+    listEntries(env.DB),
+    getMeta(env.DB, "cf_actuals_synced"),
   ]);
-  // Payroll gross by month, split staff (za + international) vs freelancers.
-  const typeById = new Map(payrollEmployees.map((e) => [e.id, e.type]));
-  const staffByMonth = new Map<string, number>();
-  const devByMonth = new Map<string, number>();
+  // Total payroll gross by month — the grid covers salaried staff AND the
+  // contractors/freelancers who appear in Xero as Developer/Contractor bills.
+  const payrollByMonth = new Map<string, number>();
   for (const pe of payrollEntries) {
-    const t = typeById.get(pe.employee_id) ?? "za";
-    const m = t === "freelancer" ? devByMonth : staffByMonth;
-    m.set(pe.period, (m.get(pe.period) ?? 0) + pe.gross);
+    payrollByMonth.set(pe.period, (payrollByMonth.get(pe.period) ?? 0) + pe.gross);
   }
   const manualMonthly = allExpenses
     .filter((e) => e.source === "manual" && e.active)
     .reduce((sum, e) => sum + monthlyEquivalent(e), 0);
-  const cf = buildDerivedCashflow(actuals, staffByMonth, devByMonth, manualMonthly, settings);
-  const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
+  // Grid layer: override categories replace model values; the rest add on top.
+  const overrideCats = categories.filter((cat) => cat.grp === OVERRIDE_GRP);
+  const adjCats = categories.filter((cat) => cat.grp !== OVERRIDE_GRP);
+  const overrides: import("./lib/cashflow_engine").CfOverrides = new Map();
+  const adjRows: import("./lib/cashflow_engine").CfAdjustmentRow[] = adjCats.map((cat) => ({ id: cat.id, name: cat.name, kind: cat.kind, values: new Map() }));
+  const adjById = new Map(adjRows.map((r) => [r.id, r]));
+  const ovKind = new Map(overrideCats.map((cat) => [cat.id, /income/i.test(cat.name) ? "income" : /people/i.test(cat.name) ? "people" : "other"] as const));
+  for (const e of entries) {
+    const ok = ovKind.get(e.category_id);
+    if (ok) {
+      const ov = overrides.get(e.period) ?? {};
+      (ov as any)[ok] = e.amount;
+      overrides.set(e.period, ov);
+    } else {
+      adjById.get(e.category_id)?.values.set(e.period, e.amount);
+    }
+  }
+  const cf = buildDerivedCashflow(actuals, payrollByMonth, manualMonthly, settings, overrides, adjRows);
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
     : undefined;
+  return { settings, cf, syncNote, overrideCats, adjCats, entries };
+}
+
+app.get("/app/accounts", async (c) => {
+  const { settings, cf, syncNote } = await loadDerived(c.env);
+  const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
   return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
-  const { categories, entries, settings, actualsThrough, forecast } = await loadCashflow(c.env.DB);
-  const [fys, fy] = parseFy(forecast.timeline, c.req.query("fy"));
+  // Ensure the three override rows exist (idempotent).
+  const existing = await listCategories(c.env.DB);
+  for (const name of OVERRIDE_NAMES) {
+    if (!existing.some((cat) => cat.grp === OVERRIDE_GRP && cat.name === name)) {
+      await createCategory(c.env.DB, { name, kind: name === "Income" ? "income" : "cost", grp: OVERRIDE_GRP });
+    }
+  }
+  const { settings, cf, overrideCats, adjCats, entries } = await loadDerived(c.env);
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
-    map.get(e.category_id)!.set(e.period, { amount: e.amount, status: e.period <= actualsThrough ? "actual" : "forecast" });
+    map.get(e.category_id)!.set(e.period, { amount: e.amount, status: "forecast" });
   }
-  return c.html(<CashflowEditor categories={categories} entries={map} forecast={forecast} settings={settings} actualsThrough={actualsThrough} fys={fys} fy={fy} />);
+  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} boundary={settings.actuals_through} saved={c.req.query("saved") === "1"} />);
 });
 
 app.post("/app/accounts/save", async (c) => {
@@ -428,8 +457,7 @@ app.post("/app/accounts/save", async (c) => {
     const status = period <= at ? "actual" : "forecast";
     await upsertEntry(c.env.DB, categoryId, period, newVal, status);
   }
-  const fyParam = /^\d{4}$/.test(String(body.fy ?? "")) ? `?fy=${body.fy}` : "";
-  return c.redirect(`/app/accounts/edit${fyParam}`);
+  return c.redirect("/app/accounts/edit?saved=1");
 });
 
 app.post("/app/accounts/actuals-through", async (c) => {

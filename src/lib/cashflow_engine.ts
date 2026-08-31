@@ -17,16 +17,23 @@ export type DerivedColumn = {
   month: string;
   isForecast: boolean;
   income: number;
-  staff: number;
-  dev: number;
+  people: number; // salaries + contractors/freelancers — one consistent series
   other: number;
   recurring: number; // manual recurring expenses (not in Xero)
-  cost: number; // staff + dev + other + recurring
+  adjIncome: number; // additional income rows (projects/pipeline) — forecast months
+  adjCost: number; // additional cost rows — forecast months
+  cost: number; // people + other + recurring + adjCost
   net: number;
   balance: number;
-  staffSrc: CfSource;
-  devSrc: CfSource;
+  incomeSrc: CfSource;
+  peopleSrc: CfSource;
+  otherSrc: CfSource;
 };
+
+/** Per-month overrides of the modelled forecast values (blank = use model). */
+export type CfOverrides = Map<string, { income?: number; people?: number; other?: number }>;
+/** Additional user rows (e.g. outstanding project income), applied to forecast months. */
+export type CfAdjustmentRow = { id: string; name: string; kind: "income" | "cost"; values: Map<string, number> };
 
 export type DerivedScenario = {
   name: "base" | "best" | "worst";
@@ -56,10 +63,11 @@ const avg = (vals: number[]): number => (vals.length ? vals.reduce((a, b) => a +
 
 export function buildDerivedCashflow(
   actuals: Map<string, CfActual>,
-  payrollStaffByMonth: Map<string, number>, // gross: za + international
-  payrollDevByMonth: Map<string, number>, // gross: freelancer
+  payrollByMonth: Map<string, number>, // total gross: staff + contractors + freelancers
   recurringManualMonthly: number,
   s: CFSettings,
+  overrides: CfOverrides = new Map(),
+  adjustments: CfAdjustmentRow[] = [],
 ): DerivedCashflow {
   const start = s.opening_period;
   const boundary = s.actuals_through; // books complete through (inclusive)
@@ -72,41 +80,48 @@ export function buildDerivedCashflow(
   const basisVals = (pick: (a: CfActual) => number): number[] =>
     avgBasis.map((m) => actuals.get(m)).filter((a): a is CfActual => !!a).map(pick);
   const incomeAvg = avg(basisVals((a) => a.income));
-  const staffAvg = avg(basisVals((a) => a.staff));
-  const devAvg = avg(basisVals((a) => a.dev));
+  const peopleAvg = avg(basisVals((a) => a.staff + a.dev));
   const otherAvg = avg(basisVals((a) => a.other));
 
   const columns: DerivedColumn[] = [];
   let balance = s.opening_balance;
   for (const month of months) {
     const isForecast = month > boundary;
-    let income: number, staff: number, dev: number, other: number, recurring: number;
-    let staffSrc: CfSource = "pnl";
-    let devSrc: CfSource = "pnl";
+    let income: number, people: number, other: number;
+    let incomeSrc: CfSource = "pnl";
+    let peopleSrc: CfSource = "pnl";
+    let otherSrc: CfSource = "pnl";
+    let adjIncome = 0;
+    let adjCost = 0;
     if (!isForecast) {
       const a = actuals.get(month);
       income = a?.income ?? 0;
-      staff = a?.staff ?? 0;
-      dev = a?.dev ?? 0;
+      people = (a?.staff ?? 0) + (a?.dev ?? 0); // salaries + contractors
       other = a?.other ?? 0;
-      // Manual recurring items are by definition outside Xero, so they're
-      // additive in actual months too.
-      recurring = recurringManualMonthly;
     } else {
-      income = incomeAvg;
-      const pStaff = payrollStaffByMonth.get(month) ?? 0;
-      const pDev = payrollDevByMonth.get(month) ?? 0;
-      staff = pStaff > 0 ? pStaff : staffAvg;
-      staffSrc = pStaff > 0 ? "payroll" : "avg";
-      dev = pDev > 0 ? pDev : devAvg;
-      devSrc = pDev > 0 ? "payroll" : "avg";
-      other = otherAvg;
-      recurring = recurringManualMonthly;
+      const ov = overrides.get(month) ?? {};
+      if (ov.income != null) { income = ov.income; incomeSrc = "manual"; }
+      else { income = incomeAvg; incomeSrc = "avg"; }
+      if (ov.people != null) { people = ov.people; peopleSrc = "manual"; }
+      else {
+        const p = payrollByMonth.get(month) ?? 0;
+        people = p > 0 ? p : peopleAvg;
+        peopleSrc = p > 0 ? "payroll" : "avg";
+      }
+      if (ov.other != null) { other = ov.other; otherSrc = "manual"; }
+      else { other = otherAvg; otherSrc = "avg"; }
+      for (const row of adjustments) {
+        const v = row.values.get(month) ?? 0;
+        if (row.kind === "income") adjIncome += v;
+        else adjCost += v;
+      }
     }
-    const cost = staff + dev + other + recurring;
-    const net = income - cost;
+    // Manual recurring items are by definition outside Xero — additive always.
+    const recurring = recurringManualMonthly;
+    const cost = people + other + recurring + adjCost;
+    const net = income + adjIncome - cost;
     balance += net;
-    columns.push({ month, isForecast, income, staff, dev, other, recurring, cost, net, balance, staffSrc, devSrc });
+    columns.push({ month, isForecast, income, people, other, recurring, adjIncome, adjCost, cost, net, balance, incomeSrc, peopleSrc, otherSrc });
   }
 
   const buildScenario = (name: "base" | "best" | "worst"): DerivedScenario => {
@@ -114,7 +129,7 @@ export function buildDerivedCashflow(
     let lowest = { month: months[0] ?? start, balance: Infinity };
     let runwayMonth: string | null = null;
     const balances = columns.map((c) => {
-      let income = c.income;
+      let income = c.income + c.adjIncome;
       let cost = c.cost;
       if (c.isForecast && name === "best") {
         income *= 1 + s.best_income_pct / 100;
