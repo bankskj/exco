@@ -8,7 +8,9 @@ const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONNECTIONS_URL = "https://api.xero.com/connections";
 const REPEATING_URL = "https://api.xero.com/api.xro/2.0/RepeatingInvoices";
 
-export const XERO_SCOPES = "offline_access accounting.settings.read accounting.transactions.read accounting.contacts.read";
+// Minimal scopes: repeating bills only. Contact names are embedded in the
+// RepeatingInvoices payload and /connections (org name) needs no scope.
+export const XERO_SCOPES = "offline_access accounting.transactions.read";
 
 export type XeroTokens = {
   access_token: string;
