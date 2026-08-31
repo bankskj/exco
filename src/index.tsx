@@ -27,6 +27,8 @@ import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFr
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
 import { IncomePage, type ExpenseBucket } from "./views/income";
+import { CashflowDerivedPage } from "./views/cashflow_derived";
+import { buildDerivedCashflow } from "./lib/cashflow_engine";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
@@ -53,6 +55,9 @@ import {
   deleteCategory,
   getSettings,
   saveSettings,
+  upsertCfActuals,
+  listCfActuals,
+  type CfActual,
 } from "./data/cashflow";
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
@@ -362,9 +367,32 @@ async function loadCashflow(db: D1Database) {
 }
 
 app.get("/app/accounts", async (c) => {
-  const { categories, settings, forecast } = await loadCashflow(c.env.DB);
-  const [fys, fy] = parseFy(forecast.timeline, c.req.query("fy"));
-  return c.html(<CashflowDashboard forecast={forecast} categories={categories} settings={settings} fys={fys} fy={fy} saved={c.req.query("saved") === "1"} />);
+  const [settings, actuals, payrollEmployees, payrollEntries, allExpenses, synced] = await Promise.all([
+    getSettings(c.env.DB),
+    listCfActuals(c.env.DB),
+    listEmployees(c.env.DB),
+    listPayrollEntries(c.env.DB),
+    listExpenses(c.env.DB),
+    getMeta(c.env.DB, "cf_actuals_synced"),
+  ]);
+  // Payroll gross by month, split staff (za + international) vs freelancers.
+  const typeById = new Map(payrollEmployees.map((e) => [e.id, e.type]));
+  const staffByMonth = new Map<string, number>();
+  const devByMonth = new Map<string, number>();
+  for (const pe of payrollEntries) {
+    const t = typeById.get(pe.employee_id) ?? "za";
+    const m = t === "freelancer" ? devByMonth : staffByMonth;
+    m.set(pe.period, (m.get(pe.period) ?? 0) + pe.gross);
+  }
+  const manualMonthly = allExpenses
+    .filter((e) => e.source === "manual" && e.active)
+    .reduce((sum, e) => sum + monthlyEquivalent(e), 0);
+  const cf = buildDerivedCashflow(actuals, staffByMonth, devByMonth, manualMonthly, settings);
+  const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
+  const syncNote = actuals.size === 0
+    ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
+    : undefined;
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
@@ -413,7 +441,7 @@ app.post("/app/accounts/actuals-through", async (c) => {
     await c.env.DB.prepare("UPDATE cf_entries SET status = CASE WHEN period <= ? THEN 'actual' ELSE 'forecast' END").bind(p).run();
   }
   const fyParam = /^\d{4}$/.test(String(b.fy ?? "")) ? `?fy=${b.fy}` : "";
-  return c.redirect(`/app/accounts/edit${fyParam}`);
+  return c.redirect(`/app/accounts${fyParam}`);
 });
 
 app.post("/app/accounts/category", async (c) => {
@@ -455,11 +483,11 @@ app.post("/app/accounts/settings", async (c) => {
     worst_income_pct: n(b.worst_income_pct, s.worst_income_pct),
     worst_cost_pct: n(b.worst_cost_pct, s.worst_cost_pct),
   });
-  return c.redirect("/app/accounts/edit");
+  return c.redirect("/app/accounts?saved=1");
 });
 
 app.get("/app/accounts/export.csv", async (c) => {
-  const { categories, forecast } = await loadCashflow(c.env.DB);
+  const { categories, forecast } = await loadCashflow(c.env.DB); // legacy manual grid export
   const [, fy] = parseFy(forecast.timeline, c.req.query("fy"));
   const periods = fy == null ? forecast.timeline : forecast.timeline.filter((p) => fiscalYearOf(p) === fy);
   const col = new Map(forecast.base.map((x) => [x.period, x]));
@@ -828,6 +856,36 @@ async function runXeroSync(env: Bindings): Promise<string> {
     const track = rule?.rule === "track" || v.monthCount >= SYNC_MIN_MONTHS;
     if (track) bills.push(vendorToBill(v, SYNC_MONTHS_BACK));
   }
+  // Refresh P&L-derived monthly actuals (drives the cashflow model).
+  try {
+    const nowMonth = new Date().toISOString().slice(0, 7);
+    const fy = fiscalYearOf(nowMonth);
+    const curStart = `${fy - 1}-03`;
+    const curCount = monthsBetweenIncl(curStart, nowMonth);
+    const [curPnl, priorPnl] = await Promise.all([
+      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount),
+      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12).catch(() => null),
+    ]);
+    const rows: CfActual[] = [];
+    for (const pnl of [priorPnl, curPnl]) {
+      if (!pnl) continue;
+      pnl.months.forEach((month, i) => {
+        let staff = 0, dev = 0, other = 0;
+        for (const r of [...pnl.cosRows, ...pnl.opexRows]) {
+          const v = r.values[i] ?? 0;
+          if (STAFF_RE.test(r.name)) staff += v;
+          else if (DEV_RE.test(r.name)) dev += v;
+          else other += v;
+        }
+        rows.push({ month, income: pnl.incomeTotal[i] ?? 0, staff, dev, other });
+      });
+    }
+    await upsertCfActuals(env.DB, rows);
+    await setMeta(env.DB, "cf_actuals_synced", new Date().toISOString());
+  } catch {
+    // P&L scope not consented yet — cashflow keeps its last actuals
+  }
+
   const [ins, upd] = await upsertXeroExpenses(env.DB, bills);
   // Prune stale xero rows: vendors that no longer appear in the sync output
   // (vanished from the window, lapsed below threshold, or filtered as
@@ -867,6 +925,10 @@ app.post("/app/expenses/sync", async (c) => {
 
 const STAFF_RE = /salar|wage|payroll|staff|bonus|\buif\b|\bpaye\b|\bsdl\b|medical aid|pension|leave pay/i;
 const DEV_RE = /developer|contractor|freelanc|consult/i;
+
+function monthsBetweenIncl(a: string, b: string): number {
+  return (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + (Number(b.slice(5, 7)) - Number(a.slice(5, 7))) + 1;
+}
 
 function lastDayISO(period: string): string {
   const [y, m] = period.split("-").map(Number);

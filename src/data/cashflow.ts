@@ -104,3 +104,23 @@ export async function saveSettings(db: D1Database, s: CFSettings): Promise<void>
   ];
   for (const [k, v] of pairs) await setMeta(db, k, v);
 }
+
+// ---- P&L-derived monthly actuals (populated by the Xero sync) --------------
+
+export type CfActual = { month: string; income: number; staff: number; dev: number; other: number };
+
+export async function upsertCfActuals(db: D1Database, rows: CfActual[]): Promise<void> {
+  const stmt = db.prepare(
+    "INSERT INTO cf_actuals (month, income, staff, dev, other, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now')) " +
+      "ON CONFLICT(month) DO UPDATE SET income=excluded.income, staff=excluded.staff, dev=excluded.dev, other=excluded.other, updated_at=datetime('now')",
+  );
+  for (let i = 0; i < rows.length; i += 50) {
+    const chunk = rows.slice(i, i + 50).map((r) => stmt.bind(r.month, r.income, r.staff, r.dev, r.other));
+    if (chunk.length) await db.batch(chunk);
+  }
+}
+
+export async function listCfActuals(db: D1Database): Promise<Map<string, CfActual>> {
+  const { results } = await db.prepare("SELECT month, income, staff, dev, other FROM cf_actuals").all<CfActual>();
+  return new Map((results ?? []).map((r) => [r.month, r]));
+}
