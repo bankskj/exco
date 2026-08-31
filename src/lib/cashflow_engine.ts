@@ -20,9 +20,10 @@ export type DerivedColumn = {
   people: number; // salaries + contractors/freelancers — one consistent series
   other: number;
   recurring: number; // manual recurring expenses (not in Xero)
+  sars: number; // SARS cash payments (VAT/PAYE settlements — not in the P&L)
   adjIncome: number; // additional income rows (projects/pipeline) — forecast months
   adjCost: number; // additional cost rows — forecast months
-  cost: number; // people + other + recurring + adjCost
+  cost: number; // people + other + recurring + sars + adjCost
   net: number;
   balance: number;
   incomeSrc: CfSource;
@@ -68,6 +69,7 @@ export function buildDerivedCashflow(
   s: CFSettings,
   overrides: CfOverrides = new Map(),
   adjustments: CfAdjustmentRow[] = [],
+  sarsByMonth: Map<string, number> = new Map(),
 ): DerivedCashflow {
   const start = s.opening_period;
   const boundary = s.actuals_through; // books complete through (inclusive)
@@ -82,6 +84,7 @@ export function buildDerivedCashflow(
   const incomeAvg = avg(basisVals((a) => a.income));
   const peopleAvg = avg(basisVals((a) => a.staff + a.dev));
   const otherAvg = avg(basisVals((a) => a.other));
+  const sarsAvg = avg(avgBasis.map((m) => sarsByMonth.get(m) ?? 0));
 
   const columns: DerivedColumn[] = [];
   let balance = s.opening_balance;
@@ -118,10 +121,11 @@ export function buildDerivedCashflow(
     }
     // Manual recurring items are by definition outside Xero — additive always.
     const recurring = recurringManualMonthly;
-    const cost = people + other + recurring + adjCost;
+    const sars = isForecast ? sarsAvg : sarsByMonth.get(month) ?? 0;
+    const cost = people + other + recurring + sars + adjCost;
     const net = income + adjIncome - cost;
     balance += net;
-    columns.push({ month, isForecast, income, people, other, recurring, adjIncome, adjCost, cost, net, balance, incomeSrc, peopleSrc, otherSrc });
+    columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, cost, net, balance, incomeSrc, peopleSrc, otherSrc });
   }
 
   const buildScenario = (name: "base" | "best" | "worst"): DerivedScenario => {

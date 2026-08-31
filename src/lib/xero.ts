@@ -337,13 +337,14 @@ const pnlNum = (v: unknown): number => {
  * dashboard by construction. monthsCount columns requested (Xero caps
  * comparison periods at 11 → max 12 columns).
  */
-export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number): Promise<PnL> {
+export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number, paymentsOnly = false): Promise<PnL> {
   const q = new URLSearchParams({
     toDate,
     timeframe: "MONTH",
     periods: String(Math.min(11, Math.max(1, monthsCount - 1))),
     standardLayout: "true",
   });
+  if (paymentsOnly) q.set("paymentsOnly", "true"); // cash basis — income when received, expenses when paid
   const res = await fetch(`https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?${q.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
   });

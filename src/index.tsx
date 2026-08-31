@@ -388,6 +388,11 @@ async function loadDerived(env: Bindings) {
   const manualMonthly = allExpenses
     .filter((e) => e.source === "manual" && e.active)
     .reduce((sum, e) => sum + monthlyEquivalent(e), 0);
+  // SARS cash payments by month (tracked from the bank feed by reference).
+  const { results: sarsRows } = await env.DB
+    .prepare("SELECT substr(bill_date,1,7) m, SUM(amount) t FROM vendor_bills WHERE vendor_name = 'SARS (tax)' GROUP BY m")
+    .all<{ m: string; t: number }>();
+  const sarsByMonth = new Map((sarsRows ?? []).map((r) => [r.m, r.t]));
   // Grid layer: override categories replace model values; the rest add on top.
   const overrideCats = categories.filter((cat) => cat.grp === OVERRIDE_GRP);
   const adjCats = categories.filter((cat) => cat.grp !== OVERRIDE_GRP);
@@ -405,7 +410,7 @@ async function loadDerived(env: Bindings) {
       adjById.get(e.category_id)?.values.set(e.period, e.amount);
     }
   }
-  const cf = buildDerivedCashflow(actuals, payrollByMonth, manualMonthly, settings, overrides, adjRows);
+  const cf = buildDerivedCashflow(actuals, payrollByMonth, manualMonthly, settings, overrides, adjRows, sarsByMonth);
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
     : undefined;
@@ -891,8 +896,8 @@ async function runXeroSync(env: Bindings): Promise<string> {
     const curStart = `${fy - 1}-03`;
     const curCount = monthsBetweenIncl(curStart, nowMonth);
     const [curPnl, priorPnl] = await Promise.all([
-      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount),
-      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12).catch(() => null),
+      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, true), // cash basis
+      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12, true).catch(() => null),
     ]);
     const rows: CfActual[] = [];
     for (const pnl of [priorPnl, curPnl]) {

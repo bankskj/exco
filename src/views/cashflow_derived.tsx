@@ -39,7 +39,7 @@ export const CashflowDerivedPage: FC<{
           <div>
             <h1 style="margin-top:12px">Accounts · Cashflow</h1>
             <p class="muted" style="margin-top:0">
-              Actuals from Xero P&amp;L through <strong>{label(boundary)}</strong> (books complete); forecast from the
+              Actuals from Xero P&amp;L (cash basis — money received/paid) through <strong>{label(boundary)}</strong> (books complete); forecast from the
               Payroll grid and the {cf.avgBasis.length}-month average of {cf.avgBasis.map(label).join(", ") || "—"}.
             </p>
           </div>
@@ -133,7 +133,7 @@ export const CashflowDerivedPage: FC<{
               <thead>
                 <tr>
                   <th style="text-align:left">Month</th><th>Income (P&amp;L)</th><th>People (salaries + contractors)</th>
-                  <th>Other expenses</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
+                  <th>Other expenses</th><th>SARS (cash)</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -143,6 +143,7 @@ export const CashflowDerivedPage: FC<{
                     <td class="num">{formatZAR(c.income)}{c.isForecast ? <span class="cellhint"> {c.incomeSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
                     <td class="num">{formatZAR(c.people)}{c.isForecast ? <span class="cellhint"> {c.peopleSrc === "manual" ? "manual" : c.peopleSrc === "payroll" ? "payroll grid" : "avg"}</span> : null}</td>
                     <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {c.otherSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
+                    <td class="num">{formatZAR(c.sars)}{c.isForecast ? <span class="cellhint"> avg</span> : null}</td>
                     <td class="num">{formatZAR(c.recurring)}</td>
                     <td class={`num ${c.adjIncome - c.adjCost < 0 ? "neg" : ""}`}>{c.adjIncome || c.adjCost ? formatZAR(c.adjIncome - c.adjCost) : "—"}</td>
                     <td class={`num ${c.net < 0 ? "neg" : "pos"}`}>{formatZAR(c.net)}</td>
