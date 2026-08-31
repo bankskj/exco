@@ -2,7 +2,7 @@
 
 Internal operations site for **Elula Online** — Accounts, Payroll, and HR tracking.
 Runs on Cloudflare Workers with a D1 database and R2 storage, behind a shared
-password gate. Intended domain: `exco.elula.online`.
+password gate. Live at **https://exco.elula.online** (workers.dev URL disabled).
 
 ## Stack
 
@@ -59,7 +59,8 @@ npm run deploy
 ## Roadmap
 
 - [x] Scaffold Worker + D1 + R2, landing + login gate
-- [ ] Custom domain `exco.elula.online` + lockdown
-- [ ] Accounts section
-- [ ] Payroll tracking
-- [ ] HR tracking
+- [x] Custom domain `exco.elula.online` (workers.dev disabled)
+- [x] Accounts section (cashflow + forecast engine, FY selector)
+- [x] Payroll tracking (gross/PAYE/nett, employee types, CSV import/export)
+- [x] HR (headcount, employee files, R2 attachments)
+- [x] Recurring expenses + Xero repeating-bills sync
