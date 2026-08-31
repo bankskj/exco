@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
-import type { AppEnv } from "./types";
+import type { AppEnv, Bindings } from "./types";
 import { checkPassword, startSession, endSession, isAuthed, requireAuth } from "./auth";
 import { Landing, Login, Dashboard } from "./views/pages";
 import { HrDashboard, HrEmployeePage, tenure } from "./views/hr";
@@ -23,8 +23,9 @@ import {
 const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 import { ExpensesPage } from "./views/expenses";
-import { listExpenses, createExpense, toggleExpense, deleteExpense, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES } from "./data/expenses";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, detectRecurringFromBills } from "./lib/xero";
+import { listExpenses, createExpense, toggleExpense, deleteExpense, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId } from "./data/expenses";
+import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -731,28 +732,129 @@ app.post("/app/xero/disconnect", async (c) => {
   return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero disconnected.")}`);
 });
 
+const SYNC_MONTHS_BACK = 6;
+const SYNC_MIN_MONTHS = 3;
+const CONTRACTOR_PREFIX = /^(developer|devloper|freelancer|contractor|salary|wages)\b/i;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** First names (≥4 chars) from payroll + HR — vendors matching these are payroll, not suppliers. */
+async function staffFirstNames(db: D1Database): Promise<string[]> {
+  const { results } = await db.prepare("SELECT name FROM employees UNION SELECT name FROM hr_employees").all<{ name: string }>();
+  const out = new Set<string>();
+  for (const r of results ?? []) {
+    const first = r.name.trim().split(/\s+/)[0];
+    if (first.length >= 4) out.add(first.toLowerCase());
+  }
+  return [...out];
+}
+
+function autoExcludeReason(vendorName: string, staffNames: string[]): string | null {
+  for (const n of staffNames) {
+    if (new RegExp(`\\b${escapeRe(n)}\\b`, "i").test(vendorName)) return "payroll match";
+  }
+  if (CONTRACTOR_PREFIX.test(vendorName)) return "contractor prefix";
+  return null;
+}
+
+/** Full Xero sync: repeating bills + rule-driven vendor detection. Used by the button and the monthly cron. */
+async function runXeroSync(env: Bindings): Promise<string> {
+  if (!env.XERO_CLIENT_ID || !env.XERO_CLIENT_SECRET) throw new Error("Xero credentials not set");
+  const token = await ensureAccessToken(env.DB, env.XERO_CLIENT_ID.trim(), env.XERO_CLIENT_SECRET.trim());
+  if (!token) throw new Error("Not connected to Xero yet");
+  const tenantId = await getMeta(env.DB, "xero_tenant_id");
+  if (!tenantId) throw new Error("No Xero organisation selected — reconnect");
+
+  const [repeating, summary, rules, names] = await Promise.all([
+    fetchRepeatingBills(token, tenantId),
+    fetchVendorBillSummary(token, tenantId, SYNC_MONTHS_BACK),
+    listVendorRules(env.DB),
+    staffFirstNames(env.DB),
+  ]);
+
+  const bills = [...repeating];
+  let excluded = 0;
+  for (const v of summary) {
+    let rule = rules.get(v.key);
+    // Persist automatic exclusions so they're visible and overridable on the review page.
+    if (!rule) {
+      const reason = autoExcludeReason(v.name, names);
+      if (reason) {
+        await setVendorRule(env.DB, v.key, v.name, "exclude", reason);
+        rule = { vendor_key: v.key, name: v.name, rule: "exclude", reason };
+      }
+    }
+    if (rule?.rule === "exclude") {
+      await deleteExpenseByXeroId(env.DB, `vendor:${v.key}`);
+      excluded++;
+      continue;
+    }
+    const track = rule?.rule === "track" || v.monthCount >= SYNC_MIN_MONTHS;
+    if (track) bills.push(vendorToBill(v, SYNC_MONTHS_BACK));
+  }
+  const [ins, upd] = await upsertXeroExpenses(env.DB, bills);
+  await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
+  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated.`;
+  await setMeta(env.DB, "xero_last_sync_result", msg);
+  return msg;
+}
+
 app.post("/app/expenses/sync", async (c) => {
-  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
   try {
-    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID.trim(), c.env.XERO_CLIENT_SECRET.trim());
-    if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Not connected to Xero yet.")}`);
-    const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
-    if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation selected — reconnect.")}`);
-    const [repeating, detected] = await Promise.all([
-      fetchRepeatingBills(token, tenantId),
-      detectRecurringFromBills(token, tenantId, 6, 3),
-    ]);
-    const bills = [...repeating, ...detected];
-    const [ins, upd] = await upsertXeroExpenses(c.env.DB, bills);
-    await setMeta(c.env.DB, "xero_last_sync", new Date().toISOString());
-    return c.redirect(
-      `/app/expenses?msg=${encodeURIComponent(
-        `Xero sync done: ${repeating.length} repeating bill(s) + ${detected.length} recurring vendor(s) detected from bills — ${ins} new, ${upd} updated.`,
-      )}`,
-    );
+    const msg = await runXeroSync(c.env);
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(msg)}`);
   } catch (e) {
     return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
+});
+
+// ----- Vendor review -----
+
+app.get("/app/expenses/vendors", async (c) => {
+  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
+  try {
+    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID.trim(), c.env.XERO_CLIENT_SECRET.trim());
+    if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Connect Xero first.")}`);
+    const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
+    if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation — reconnect.")}`);
+    const [summary, rules, names] = await Promise.all([
+      fetchVendorBillSummary(token, tenantId, SYNC_MONTHS_BACK),
+      listVendorRules(c.env.DB),
+      staffFirstNames(c.env.DB),
+    ]);
+    const monthSet = new Set<string>();
+    for (const v of summary) for (const m of Object.keys(v.months)) monthSet.add(m);
+    const monthCols = [...monthSet].sort().slice(-SYNC_MONTHS_BACK);
+    const vendors: AnnotatedVendor[] = summary.map((v) => {
+      const rule = rules.get(v.key) ?? null;
+      const autoReason = rule ? null : autoExcludeReason(v.name, names);
+      let effective: AnnotatedVendor["effective"];
+      if (rule?.rule === "track") effective = "track";
+      else if (rule?.rule === "exclude" || autoReason) effective = "exclude";
+      else if (v.monthCount >= SYNC_MIN_MONTHS) effective = "auto-track";
+      else effective = "ignored";
+      return { ...v, rule, autoExcludeReason: autoReason, effective };
+    });
+    const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+    return c.html(<VendorReviewPage vendors={vendors} monthCols={monthCols} monthsBack={SYNC_MONTHS_BACK} minMonths={SYNC_MIN_MONTHS} msg={msg} />);
+  } catch (e) {
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Vendor review failed: ${e instanceof Error ? e.message : "unknown"}`)}`);
+  }
+});
+
+app.post("/app/expenses/vendor-rule", async (c) => {
+  const b = await c.req.parseBody();
+  const key = String(b.key ?? "");
+  const name = String(b.name ?? "").trim() || key;
+  const rule = String(b.rule ?? "");
+  if (key) {
+    if (rule === "track" || rule === "exclude") {
+      await setVendorRule(c.env.DB, key, name, rule, "manual");
+      if (rule === "exclude") await deleteExpenseByXeroId(c.env.DB, `vendor:${key}`);
+    } else if (rule === "clear") {
+      await clearVendorRule(c.env.DB, key);
+    }
+  }
+  return c.redirect("/app/expenses/vendors");
 });
 
 // --- helpers -------------------------------------------------------------
@@ -804,4 +906,14 @@ function csvResponse(c: any, filename: string, body: string): Response {
 
 app.notFound((c) => c.html(<Landing />, 404));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Monthly cron: refresh the Xero connection and recurring-expense detection.
+  async scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      runXeroSync(env).catch(async (e) => {
+        await setMeta(env.DB, "xero_last_sync_result", `Scheduled sync failed: ${e instanceof Error ? e.message : "unknown"}`);
+      }),
+    );
+  },
+};

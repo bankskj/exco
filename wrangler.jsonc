@@ -11,6 +11,10 @@
   "routes": [
     { "pattern": "exco.elula.online", "custom_domain": true }
   ],
+  "triggers": {
+    // Monthly Xero recurring-expense sync: 04:00 UTC on the 1st (06:00 SAST)
+    "crons": ["0 4 1 * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

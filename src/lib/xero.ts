@@ -120,23 +120,26 @@ function scheduleToFrequency(unit: string, period: number): { frequency: string;
   return { frequency: `every ${period} months`, interval_months: period };
 }
 
+export type VendorSummary = {
+  key: string; // Xero ContactID
+  name: string;
+  months: Record<string, number>; // 'YYYY-MM' -> total billed
+  monthCount: number;
+  billCount: number;
+  total: number;
+  avgMonthly: number; // average over months actually billed
+  currency: string;
+};
+
 /**
- * Detect recurring expenses from ordinary bills: ACCPAY invoices over the
- * last `monthsBack` months, grouped by vendor; a vendor billing in at least
- * `minMonths` distinct months counts as recurring, at its average monthly
- * spend. (Most orgs enter subscriptions as individual bills, not Xero
- * repeating invoices — this catches those.)
+ * All ACCPAY bill activity in the last `monthsBack` months, grouped by vendor
+ * with per-month totals. The recurring decision (track/exclude/threshold) is
+ * made by the caller.
  */
-export async function detectRecurringFromBills(
-  accessToken: string,
-  tenantId: string,
-  monthsBack = 6,
-  minMonths = 3,
-): Promise<XeroRepeatingBill[]> {
+export async function fetchVendorBillSummary(accessToken: string, tenantId: string, monthsBack = 6): Promise<VendorSummary[]> {
   const now = new Date();
-  const sinceY = now.getUTCFullYear();
-  const sinceM = now.getUTCMonth() + 1 - monthsBack; // JS handles negative via Date, but build args manually
-  const y = sinceM >= 1 ? sinceY : sinceY - 1;
+  const sinceM = now.getUTCMonth() + 1 - monthsBack;
+  const y = sinceM >= 1 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
   const m = ((sinceM - 1 + 12) % 12) + 1;
   const q = new URLSearchParams({
     where: `Type=="ACCPAY" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
@@ -147,36 +150,50 @@ export async function detectRecurringFromBills(
   if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as any;
 
-  // vendor -> month -> total
-  const byVendor = new Map<string, { name: string; months: Map<string, number>; currency: string }>();
+  const byVendor = new Map<string, VendorSummary>();
   for (const inv of data.Invoices ?? []) {
     if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
-    const cid = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
+    const key = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
     const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
     if (!month) continue;
-    if (!byVendor.has(cid)) {
-      byVendor.set(cid, { name: String(inv.Contact?.Name ?? "Unknown vendor"), months: new Map(), currency: String(inv.CurrencyCode ?? "ZAR") });
+    if (!byVendor.has(key)) {
+      byVendor.set(key, {
+        key,
+        name: String(inv.Contact?.Name ?? "Unknown vendor"),
+        months: {},
+        monthCount: 0,
+        billCount: 0,
+        total: 0,
+        avgMonthly: 0,
+        currency: String(inv.CurrencyCode ?? "ZAR"),
+      });
     }
-    const v = byVendor.get(cid)!;
-    v.months.set(month, (v.months.get(month) ?? 0) + Number(inv.Total ?? 0));
+    const v = byVendor.get(key)!;
+    const amt = Number(inv.Total ?? 0);
+    v.months[month] = (v.months[month] ?? 0) + amt;
+    v.total += amt;
+    v.billCount++;
   }
+  const out = [...byVendor.values()];
+  for (const v of out) {
+    v.monthCount = Object.keys(v.months).length;
+    v.avgMonthly = v.monthCount ? Math.round((v.total / v.monthCount) * 100) / 100 : 0;
+  }
+  return out.sort((a, b) => b.avgMonthly - a.avgMonthly);
+}
 
-  const out: XeroRepeatingBill[] = [];
-  for (const [cid, v] of byVendor) {
-    if (v.months.size < minMonths) continue;
-    const avg = [...v.months.values()].reduce((a, b) => a + b, 0) / v.months.size;
-    out.push({
-      xero_id: `vendor:${cid}`,
-      name: v.name,
-      vendor: v.name,
-      amount: Math.round(avg * 100) / 100,
-      frequency: `monthly (detected, ${v.months.size}/${monthsBack} mo)`,
-      interval_months: 1,
-      next_date: null,
-      currency: v.currency,
-    });
-  }
-  return out.sort((a, b) => b.amount - a.amount);
+/** Convert a vendor summary into the expense-upsert shape. */
+export function vendorToBill(v: VendorSummary, monthsBack = 6): XeroRepeatingBill {
+  return {
+    xero_id: `vendor:${v.key}`,
+    name: v.name,
+    vendor: v.name,
+    amount: v.avgMonthly,
+    frequency: `monthly (detected, ${v.monthCount}/${monthsBack} mo)`,
+    interval_months: 1,
+    next_date: null,
+    currency: v.currency,
+  };
 }
 
 /** Authorised repeating BILLS (Type=ACCPAY) from the connected org. */

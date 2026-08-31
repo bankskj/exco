@@ -132,6 +132,7 @@ const XeroCard: FC<{ xero: XeroState }> = ({ xero }) => (
       {xero.connected ? (
         <div class="row" style="gap:10px">
           <span class="badge income">connected · {xero.orgName ?? "org"}</span>
+          <a class="btn btn-sm" href="/app/expenses/vendors">Review vendors</a>
           <form method="post" action="/app/expenses/sync" style="margin:0">
             <button class="btn btn-sm btn-primary" type="submit">Sync from Xero</button>
           </form>
@@ -170,9 +171,10 @@ npx wrangler secret put XERO_CLIENT_SECRET</pre>
       </div>
     ) : (
       <p class="muted" style="margin:12px 0 0">
-        Sync pulls Xero repeating bills AND detects recurring vendors from ordinary bills (billed in 3+ of the last 6
-        months, at average monthly spend). Upserts by Xero ID — re-syncing refreshes amounts, paused rows stay paused,
-        manual expenses are never touched. Pause anything that isn't truly recurring.
+        Sync pulls Xero repeating bills and detects recurring vendors from ordinary bills (3+ of the last 6 months, at
+        average monthly spend). Vendors matching payroll names or contractor prefixes are excluded automatically —
+        fine-tune everything in <a href="/app/expenses/vendors">Review vendors</a>. Runs automatically on the 1st of
+        every month.
       </p>
     )}
   </div>

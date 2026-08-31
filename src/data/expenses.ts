@@ -69,6 +69,34 @@ export async function deleteExpense(db: D1Database, id: string): Promise<void> {
   await db.prepare("DELETE FROM recurring_expenses WHERE id = ?").bind(id).run();
 }
 
+// ---- vendor rules ----------------------------------------------------------
+
+export type VendorRule = { vendor_key: string; name: string; rule: "track" | "exclude"; reason: string | null };
+
+export async function listVendorRules(db: D1Database): Promise<Map<string, VendorRule>> {
+  const { results } = await db.prepare("SELECT vendor_key, name, rule, reason FROM vendor_rules").all<VendorRule>();
+  return new Map((results ?? []).map((r) => [r.vendor_key, r]));
+}
+
+export async function setVendorRule(db: D1Database, key: string, name: string, rule: "track" | "exclude", reason: string): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO vendor_rules (vendor_key, name, rule, reason) VALUES (?, ?, ?, ?) " +
+        "ON CONFLICT(vendor_key) DO UPDATE SET name = excluded.name, rule = excluded.rule, reason = excluded.reason",
+    )
+    .bind(key, name, rule, reason)
+    .run();
+}
+
+export async function clearVendorRule(db: D1Database, key: string): Promise<void> {
+  await db.prepare("DELETE FROM vendor_rules WHERE vendor_key = ?").bind(key).run();
+}
+
+/** Remove a synced expense row by its Xero upsert key. */
+export async function deleteExpenseByXeroId(db: D1Database, xeroId: string): Promise<void> {
+  await db.prepare("DELETE FROM recurring_expenses WHERE xero_id = ?").bind(xeroId).run();
+}
+
 /** Upsert Xero repeating bills by xero_id. Returns [inserted, updated]. */
 export async function upsertXeroExpenses(db: D1Database, bills: XeroRepeatingBill[]): Promise<[number, number]> {
   let ins = 0;
