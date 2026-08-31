@@ -230,13 +230,8 @@ app.get("/app/payroll/export.csv", async (c) => {
 // ---------- Accounts / Cashflow ----------
 
 async function loadCashflow(db: D1Database) {
-  const [categories, entries, settings, actualsThrough] = await Promise.all([
-    listCategories(db),
-    listEntries(db),
-    getSettings(db),
-    getMeta(db, "cf_actuals_through"),
-  ]);
-  const at = actualsThrough || settings.opening_period;
+  const [categories, entries, settings] = await Promise.all([listCategories(db), listEntries(db), getSettings(db)]);
+  const at = settings.actuals_through;
   // Apply the actuals-through boundary so status reflects the current lock point.
   const normalized: CFEntry[] = entries.map((e) => ({
     ...e,
@@ -289,6 +284,18 @@ app.post("/app/accounts/save", async (c) => {
   return c.redirect(`/app/accounts/edit${fyParam}`);
 });
 
+app.post("/app/accounts/actuals-through", async (c) => {
+  const b = await c.req.parseBody();
+  const p = String(b.actuals_through ?? "");
+  if (isPeriod(p)) {
+    await setMeta(c.env.DB, "cf_actuals_through", p);
+    // Keep stored entry statuses consistent with the new boundary.
+    await c.env.DB.prepare("UPDATE cf_entries SET status = CASE WHEN period <= ? THEN 'actual' ELSE 'forecast' END").bind(p).run();
+  }
+  const fyParam = /^\d{4}$/.test(String(b.fy ?? "")) ? `?fy=${b.fy}` : "";
+  return c.redirect(`/app/accounts/edit${fyParam}`);
+});
+
 app.post("/app/accounts/category", async (c) => {
   const b = await c.req.parseBody();
   const name = String(b.name ?? "").trim();
@@ -321,13 +328,13 @@ app.post("/app/accounts/settings", async (c) => {
   await saveSettings(c.env.DB, {
     opening_balance: parseMoney(String(b.opening_balance ?? s.opening_balance)),
     opening_period: isPeriod(String(b.opening_period)) ? String(b.opening_period) : s.opening_period,
+    actuals_through: isPeriod(String(b.actuals_through)) ? String(b.actuals_through) : s.actuals_through,
     horizon_months: Math.max(1, Math.min(60, n(b.horizon_months, s.horizon_months))),
     best_income_pct: n(b.best_income_pct, s.best_income_pct),
     best_cost_pct: n(b.best_cost_pct, s.best_cost_pct),
     worst_income_pct: n(b.worst_income_pct, s.worst_income_pct),
     worst_cost_pct: n(b.worst_cost_pct, s.worst_cost_pct),
   });
-  if (isPeriod(String(b.actuals_through))) await setMeta(c.env.DB, "cf_actuals_through", String(b.actuals_through));
   return c.redirect("/app/accounts/edit");
 });
 

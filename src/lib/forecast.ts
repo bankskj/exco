@@ -27,6 +27,7 @@ export type CFEntry = {
 export type CFSettings = {
   opening_balance: number;
   opening_period: string;
+  actuals_through: string; // authoritative actual/forecast boundary (inclusive)
   horizon_months: number;
   best_income_pct: number;
   best_cost_pct: number;
@@ -90,14 +91,15 @@ export function computeForecast(cats: CFCategory[], entries: CFEntry[], s: CFSet
     if (e.status === "actual") actualPeriods.push(e.period);
     else forecastPeriods.push(e.period);
   }
-  const lastActual = maxPeriod(actualPeriods);
+  // The actual/forecast boundary is the setting — not inferred from entries —
+  // so an empty month declared "actual" really is actual (zeros).
+  const lastActual = s.actuals_through;
   const earliest = minPeriod([...actualPeriods, s.opening_period]) ?? s.opening_period;
 
-  // Timeline: opening period (or earliest actual) → last actual + horizon,
+  // Timeline: opening period (or earliest actual) → boundary + horizon,
   // extended to cover any manual forecast entries beyond the horizon.
   const start = earliest < s.opening_period ? earliest : s.opening_period;
-  const forecastAnchor = lastActual ?? addMonths(s.opening_period, -1);
-  let end = addMonths(forecastAnchor, Math.max(1, s.horizon_months));
+  let end = addMonths(lastActual, Math.max(1, s.horizon_months));
   const maxForecast = maxPeriod(forecastPeriods);
   if (maxForecast && maxForecast > end) end = maxForecast;
   const timeline = rangeInclusive(start, end);
@@ -108,7 +110,7 @@ export function computeForecast(cats: CFCategory[], entries: CFEntry[], s: CFSet
   // Resolve a cell value for (cat, period).
   const resolve = (cat: CFCategory, period: string): MonthCell => {
     const direct = byCatPeriod.get(`${cat.id}|${period}`);
-    const isForecastPeriod = lastActual == null ? period >= s.opening_period : period > lastActual;
+    const isForecastPeriod = period > lastActual;
     if (direct && direct.status === "actual") {
       return { amount: direct.amount, source: "actual" };
     }
@@ -131,7 +133,7 @@ export function computeForecast(cats: CFCategory[], entries: CFEntry[], s: CFSet
   const base: MonthColumn[] = [];
   let balance = s.opening_balance;
   for (const period of timeline) {
-    const isForecast = lastActual == null ? period >= s.opening_period : period > lastActual;
+    const isForecast = period > lastActual;
     const cells: Record<string, MonthCell> = {};
     let income = 0;
     let cost = 0;
@@ -179,7 +181,7 @@ export function computeForecast(cats: CFCategory[], entries: CFEntry[], s: CFSet
       endBalance: columns.length ? columns[columns.length - 1].balance : s.opening_balance,
       lowest,
       runwayPeriod,
-      runwayMonths: runwayPeriod && lastActual ? monthsBetween(lastActual, runwayPeriod) : null,
+      runwayMonths: runwayPeriod ? monthsBetween(lastActual, runwayPeriod) : null,
     };
   };
 

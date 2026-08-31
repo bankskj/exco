@@ -63,15 +63,27 @@ export const CashflowEditor: FC<{
           </div>
         </div>
 
-        <div class="section-block">
+        <div class="row spread section-block" style="align-items:center">
           <FySelector base="/app/accounts/edit" fys={fys} fy={fy} />
+          <form method="post" action="/app/accounts/actuals-through" class="row" style="gap:8px;margin:0">
+            {fy != null ? <input type="hidden" name="fy" value={String(fy)} /> : null}
+            <label style="margin:0">Actuals through</label>
+            <select name="actuals_through" style="width:auto;padding:8px 12px">
+              {forecast.timeline.map((p) => (
+                <option value={p} selected={p === actualsThrough}>{label(p)}</option>
+              ))}
+            </select>
+            <button class="btn btn-sm btn-primary" type="submit">Set</button>
+          </form>
         </div>
 
         <div class="callout section-block">
           <strong>How the forecast works.</strong> Months up to <strong>{label(actualsThrough)}</strong> are
-          <em> actuals</em>. After that, each line is projected: <span class="badge recurring">recurring</span> lines
-          carry the last value forward, others use a 3-month trailing average. A greyed number is the projection —
-          type over any future cell to override it. Blank a cell to clear it.
+          <em> actuals</em> — captured figures, locked as history. Months after are <em>forecast</em>:
+          <span class="badge recurring"> recurring</span> lines carry the last actual forward, others use a
+          3-month trailing average, and a greyed number is that projection — type over any future cell to
+          override it, blank it to clear. <strong>To close a month:</strong> enter its real figures, then move
+          <em> Actuals through</em> to that month.
         </div>
 
         <form method="post" action="/app/accounts/save">
@@ -86,7 +98,12 @@ export const CashflowEditor: FC<{
                 <tr>
                   <th>Line item</th>
                   {periods.map((p) => (
-                    <th>{shortLabel(p)}{p > actualsThrough ? <div class="cellhint">fcast</div> : null}</th>
+                    <th>
+                      {shortLabel(p)}
+                      {p > actualsThrough
+                        ? <div class="cellhint" style="color:#f6c453">fcast</div>
+                        : <div class="cellhint" style="color:#6ee7b7">actual</div>}
+                    </th>
                   ))}
                 </tr>
               </thead>
