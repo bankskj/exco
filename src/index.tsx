@@ -103,8 +103,15 @@ app.get("/app/payroll/capture", async (c) => {
   const tRaw = c.req.query("type");
   const typeFilter = EMPLOYEE_TYPES.includes(tRaw as any) ? (tRaw as (typeof EMPLOYEE_TYPES)[number]) : null;
   const gridPeriods = seq(from, months);
+  const imp = c.req.query("import");
+  let importMsg: string | undefined;
+  if (imp === "err") importMsg = "Import failed — upload a CSV with at least a Name column (use the export as a template).";
+  else if (imp) {
+    const m = imp.match(/^(\d+)u-(\d+)c$/);
+    if (m) importMsg = `Import complete: ${m[1]} employee(s) updated, ${m[2]} created.`;
+  }
   return c.html(
-    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} metric={metric} typeFilter={typeFilter} saved={c.req.query("saved") === "1"} />,
+    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} metric={metric} typeFilter={typeFilter} saved={c.req.query("saved") === "1"} importMsg={importMsg} />,
   );
 });
 
@@ -181,6 +188,91 @@ app.post("/app/payroll/employees/save", async (c) => {
     }
   }
   return c.redirect("/app/payroll/capture?saved=1");
+});
+
+app.get("/app/payroll/employees.csv", async (c) => {
+  const employees = await listEmployees(c.env.DB);
+  const lines = ["ID,Name,Type,Mentor,CTC,Default PAYE,Default Nett,Status"];
+  for (const e of employees) {
+    const nett = e.ctc != null ? e.ctc - e.paye_default : null;
+    lines.push(
+      [
+        e.id,
+        csv(e.name),
+        e.type,
+        csv(e.mentor ?? ""),
+        e.ctc != null ? e.ctc.toFixed(2) : "",
+        e.paye_default ? e.paye_default.toFixed(2) : "",
+        nett != null ? nett.toFixed(2) : "",
+        e.status,
+      ].join(","),
+    );
+  }
+  return csvResponse(c, "employees.csv", lines.join("\n"));
+});
+
+app.post("/app/payroll/employees/import", async (c) => {
+  const body = await c.req.parseBody();
+  const f = body.file;
+  if (!(f instanceof File)) return c.redirect("/app/payroll/capture?import=err");
+  let text = await f.text();
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const rows = parseCsv(text);
+  if (rows.length < 2) return c.redirect("/app/payroll/capture?import=err");
+
+  // Map columns by header name (case/space tolerant).
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...names: string[]) => header.findIndex((h) => names.includes(h));
+  const iId = col("id");
+  const iName = col("name", "employee");
+  const iType = col("type");
+  const iMentor = col("mentor", "mentor / director", "director");
+  const iCtc = col("ctc", "ctc / gross", "gross", "ctc (monthly)");
+  const iPaye = col("default paye", "paye");
+  const iNett = col("default nett", "nett");
+  const iStatus = col("status");
+  if (iName === -1) return c.redirect("/app/payroll/capture?import=err");
+
+  const employees = await listEmployees(c.env.DB);
+  const byId = new Map(employees.map((e) => [e.id, e]));
+  const byName = new Map(employees.map((e) => [e.name.trim().toLowerCase(), e]));
+  const cell = (r: string[], i: number) => (i >= 0 && i < r.length ? r[i].trim() : "");
+  const normType = (raw: string, fallback: string): string => {
+    const t = raw.toLowerCase();
+    if (t.startsWith("za")) return "za";
+    if (t.startsWith("int")) return "international";
+    if (t.startsWith("free")) return "freelancer";
+    return fallback;
+  };
+
+  let updated = 0;
+  let created = 0;
+  for (const r of rows.slice(1)) {
+    const name = cell(r, iName);
+    if (!name) continue;
+    const existing = byId.get(cell(r, iId)) ?? byName.get(name.toLowerCase()) ?? null;
+    const type = normType(cell(r, iType), existing?.type ?? "za");
+    const mentor = iMentor >= 0 ? cell(r, iMentor) || null : existing?.mentor ?? null;
+    const ctcRaw = cell(r, iCtc);
+    const ctc = ctcRaw !== "" ? parseMoney(ctcRaw) : existing?.ctc ?? null;
+    // PAYE precedence: explicit PAYE cell > derived from nett (CTC - nett) > existing.
+    const payeRaw = cell(r, iPaye);
+    const nettRaw = cell(r, iNett);
+    let paye_default = existing?.paye_default ?? 0;
+    if (payeRaw !== "") paye_default = Math.max(0, parseMoney(payeRaw));
+    else if (nettRaw !== "" && ctc != null) paye_default = Math.max(0, ctc - parseMoney(nettRaw));
+    const statusRaw = cell(r, iStatus).toLowerCase();
+    const status = statusRaw === "inactive" ? "inactive" : statusRaw === "active" ? "active" : existing?.status ?? "active";
+
+    if (existing) {
+      await updateEmployee(c.env.DB, existing.id, { name, mentor, ctc, paye_default, type, status });
+      updated++;
+    } else {
+      await createEmployee(c.env.DB, { name, mentor, ctc, paye_default, type, status });
+      created++;
+    }
+  }
+  return c.redirect(`/app/payroll/capture?import=${updated}u-${created}c`);
 });
 
 app.post("/app/payroll/paye/fill", async (c) => {
@@ -372,6 +464,38 @@ app.get("/app/hr", (c) => c.html(<SectionStub icon="👥" title="HR" />));
 function csv(v: string): string {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Minimal CSV parser: quoted fields, escaped quotes, CRLF/LF. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQ = false;
+      } else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ",") {
+      row.push(cur);
+      cur = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cur);
+      cur = "";
+      if (row.some((c) => c !== "")) rows.push(row);
+      row = [];
+    } else cur += ch;
+  }
+  row.push(cur);
+  if (row.some((c) => c !== "")) rows.push(row);
+  return rows;
 }
 function csvResponse(c: any, filename: string, body: string): Response {
   return new Response("﻿" + body, {

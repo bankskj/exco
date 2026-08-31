@@ -201,7 +201,8 @@ export const PayrollCapturePage: FC<{
   metric: Metric;
   typeFilter: EmployeeType | null;
   saved?: boolean;
-}> = ({ employees, report, gridPeriods, from, months, metric, typeFilter, saved }) => {
+  importMsg?: string;
+}> = ({ employees, report, gridPeriods, from, months, metric, typeFilter, saved, importMsg }) => {
   const visible = typeFilter ? employees.filter((e) => e.type === typeFilter) : employees;
   const cellVal = (empId: string, p: string) => report.matrix.get(empId)?.get(p);
   const colTotal = (p: string) =>
@@ -234,6 +235,7 @@ export const PayrollCapturePage: FC<{
         <SubNav active="capture" />
 
         {saved ? <div class="callout section-block">✓ Changes saved.</div> : null}
+        {importMsg ? <div class="callout section-block">{importMsg}</div> : null}
 
         <div class="row spread section-block">
           <div class="row" style="gap:10px">
@@ -360,7 +362,21 @@ export const PayrollCapturePage: FC<{
 
 const EmployeeManager: FC<{ employees: Employee[] }> = ({ employees }) => (
   <div class="section-block card">
-    <h3>Employees</h3>
+    <div class="row spread">
+      <h3 style="margin:0">Employees</h3>
+      <div class="row" style="gap:10px">
+        <a class="btn btn-sm" href="/app/payroll/employees.csv">⬇ Export employees CSV</a>
+        <form method="post" action="/app/payroll/employees/import" enctype="multipart/form-data" class="row" style="gap:8px;margin:0">
+          <input type="file" name="file" accept=".csv,text/csv" required style="font-size:12px;max-width:220px" />
+          <button class="btn btn-sm btn-primary" type="submit">Import CSV</button>
+        </form>
+      </div>
+    </div>
+    <p class="muted" style="font-size:12px;margin:8px 0 16px">
+      Bulk update: export, edit in Excel, import. Rows match by ID (keep that column), or by Name for new people.
+      Fill <strong>Default PAYE</strong> — or leave it blank and fill <strong>Default Nett</strong> and PAYE is
+      derived as CTC − nett. Blank cells keep the current value.
+    </p>
     <form method="post" action="/app/payroll/employee" class="formgrid" style="margin-bottom:18px">
       <div><label>Name</label><input type="text" name="name" required /></div>
       <div><label>Type</label>
