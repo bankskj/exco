@@ -23,8 +23,9 @@ import {
 const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 import { ExpensesPage } from "./views/expenses";
-import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, billingPatterns } from "./data/expenses";
+import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, listAllVendorBills, billingPatterns } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
+import { MonthlyExpensesPage, type MonthSummary, type VendorGroup } from "./views/monthly_expenses";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
@@ -830,7 +831,7 @@ async function runXeroSync(env: Bindings): Promise<string> {
   // Refresh the per-vendor bill history that powers the expense drawers.
   await replaceVendorBills(
     env.DB,
-    summary.flatMap((v) => v.bills.map((b) => ({ vendor_key: v.key, bill_date: b.date, amount: b.amount, reference: b.reference }))),
+    summary.flatMap((v) => v.bills.map((b) => ({ vendor_key: v.key, vendor_name: v.name, bill_date: b.date, amount: b.amount, reference: b.reference }))),
   );
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
   const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated.`;
@@ -845,6 +846,66 @@ app.post("/app/expenses/sync", async (c) => {
   } catch (e) {
     return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
+});
+
+// ----- Monthly expense log -----
+
+app.get("/app/expenses/monthly", async (c) => {
+  const [bills, rules, names] = await Promise.all([
+    listAllVendorBills(c.env.DB),
+    listVendorRules(c.env.DB),
+    staffFirstNames(c.env.DB),
+  ]);
+  // Staff/developer filter: rule-based payroll & contractor exclusions plus a
+  // live name match. Manual "exclude" rules (non-recurring vendors) stay in
+  // the log — they're still real expenses that month.
+  const isStaffVendor = (key: string, name: string): boolean => {
+    const rule = rules.get(key);
+    if (rule?.rule === "exclude" && (rule.reason === "payroll match" || rule.reason === "contractor prefix")) return true;
+    return autoExcludeReason(name || rule?.name || "", names) != null;
+  };
+  const excludedKeys = new Set<string>();
+  const byMonth = new Map<string, { total: number; billCount: number; vendors: Set<string> }>();
+  const kept: typeof bills = [];
+  for (const b of bills) {
+    const name = b.vendor_name || rules.get(b.vendor_key)?.name || "";
+    if (isStaffVendor(b.vendor_key, name)) {
+      excludedKeys.add(b.vendor_key);
+      continue;
+    }
+    kept.push(b);
+    const month = b.bill_date.slice(0, 7);
+    if (!byMonth.has(month)) byMonth.set(month, { total: 0, billCount: 0, vendors: new Set() });
+    const m = byMonth.get(month)!;
+    m.total += b.amount;
+    m.billCount++;
+    m.vendors.add(b.vendor_key);
+  }
+  const months: MonthSummary[] = [...byMonth.entries()]
+    .map(([month, m]) => ({ month, total: m.total, billCount: m.billCount, vendorCount: m.vendors.size }))
+    .sort((a, b) => (a.month < b.month ? 1 : -1));
+
+  const mRaw = c.req.query("m");
+  const selected = mRaw && isPeriod(mRaw) && byMonth.has(mRaw) ? mRaw : null;
+  let groups: VendorGroup[] = [];
+  if (selected) {
+    const byVendor = new Map<string, VendorGroup>();
+    for (const b of kept) {
+      if (b.bill_date.slice(0, 7) !== selected) continue;
+      if (!byVendor.has(b.vendor_key)) {
+        byVendor.set(b.vendor_key, { key: b.vendor_key, name: b.vendor_name || rules.get(b.vendor_key)?.name || "Unknown vendor", total: 0, bills: [] });
+      }
+      const g = byVendor.get(b.vendor_key)!;
+      g.total += b.amount;
+      g.bills.push(b);
+    }
+    groups = [...byVendor.values()].sort((a, b) => b.total - a.total);
+    for (const g of groups) g.bills.sort((a, b) => (a.bill_date < b.bill_date ? 1 : -1));
+  }
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  return c.html(
+    <MonthlyExpensesPage months={months} selected={selected} groups={groups} excludedCount={excludedKeys.size} currentMonth={currentMonth} />,
+  );
 });
 
 // ----- Vendor review -----

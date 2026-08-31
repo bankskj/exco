@@ -108,22 +108,30 @@ export async function deleteExpenseByXeroId(db: D1Database, xeroId: string): Pro
 
 // ---- vendor bill history ---------------------------------------------------
 
-export type VendorBill = { vendor_key: string; bill_date: string; amount: number; reference: string | null };
+export type VendorBill = { vendor_key: string; vendor_name: string; bill_date: string; amount: number; reference: string | null };
 
 /** Replace the stored bill history (called on each sync). */
 export async function replaceVendorBills(db: D1Database, bills: (VendorBill & { id?: string })[]): Promise<void> {
   await db.prepare("DELETE FROM vendor_bills").run();
-  const stmt = db.prepare("INSERT INTO vendor_bills (id, vendor_key, bill_date, amount, reference) VALUES (?, ?, ?, ?, ?)");
+  const stmt = db.prepare("INSERT INTO vendor_bills (id, vendor_key, vendor_name, bill_date, amount, reference) VALUES (?, ?, ?, ?, ?, ?)");
   // batch in chunks to stay well under statement limits
   for (let i = 0; i < bills.length; i += 50) {
-    const chunk = bills.slice(i, i + 50).map((b) => stmt.bind(uuid(), b.vendor_key, b.bill_date, b.amount, b.reference));
+    const chunk = bills.slice(i, i + 50).map((b) => stmt.bind(uuid(), b.vendor_key, b.vendor_name, b.bill_date, b.amount, b.reference));
     if (chunk.length) await db.batch(chunk);
   }
 }
 
+/** Every stored bill (last sync window), oldest sync range, for the monthly log. */
+export async function listAllVendorBills(db: D1Database): Promise<VendorBill[]> {
+  const { results } = await db
+    .prepare("SELECT vendor_key, vendor_name, bill_date, amount, reference FROM vendor_bills ORDER BY bill_date DESC")
+    .all<VendorBill>();
+  return results ?? [];
+}
+
 export async function listVendorBills(db: D1Database, vendorKey: string): Promise<VendorBill[]> {
   const { results } = await db
-    .prepare("SELECT vendor_key, bill_date, amount, reference FROM vendor_bills WHERE vendor_key = ? ORDER BY bill_date DESC")
+    .prepare("SELECT vendor_key, vendor_name, bill_date, amount, reference FROM vendor_bills WHERE vendor_key = ? ORDER BY bill_date DESC")
     .bind(vendorKey)
     .all<VendorBill>();
   return results ?? [];

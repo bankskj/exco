@@ -3,6 +3,7 @@ import { Layout } from "./layout";
 import type { VendorSummary } from "../lib/xero";
 import type { VendorRule } from "../data/expenses";
 import { formatZAR, formatZARCompact } from "../lib/money";
+import { ExpenseTabs } from "./monthly_expenses";
 
 export type AnnotatedVendor = VendorSummary & {
   rule: VendorRule | null;
@@ -32,6 +33,8 @@ export const VendorReviewPage: FC<{
             </p>
           </div>
         </div>
+
+        <ExpenseTabs active="vendors" />
 
         {msg ? <div class="callout section-block">{msg}</div> : null}
 

@@ -5,6 +5,7 @@ import type { XeroState } from "../lib/xero";
 import { formatZAR } from "../lib/money";
 import { formatDMY } from "../lib/period";
 import { hBars } from "../lib/charts";
+import { ExpenseTabs } from "./monthly_expenses";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -77,6 +78,8 @@ export const ExpensesPage: FC<{
           </div>
           <a class="btn btn-sm" href="/app/expenses/export.csv">⬇ Export CSV</a>
         </div>
+
+        <ExpenseTabs active="recurring" />
 
         {msg ? <div class="callout section-block">{msg}</div> : null}
 
