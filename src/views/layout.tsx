@@ -155,7 +155,7 @@ const NAV = [
 export const Layout: FC<
   PropsWithChildren<{ title: string; authed?: boolean; section?: string; wide?: boolean }>
 > = ({ title, authed, section, wide, children }) => (
-  <html lang="en">
+  <html lang="en-ZA">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />

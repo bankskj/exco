@@ -48,7 +48,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq, fiscalYearOf, fyLabel } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY } from "./lib/period";
 
 /** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
 function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
@@ -507,7 +507,7 @@ app.get("/app/hr/export.csv", async (c) => {
     lines.push(
       [
         csv(e.name), csv(e.email ?? ""), csv(e.position ?? ""), csv(e.team ?? ""), csv(e.manager ?? ""),
-        e.start_date ?? "", e.end_date ?? "", tenure(e, now).label, e.end_date ? "left" : "active",
+        e.start_date ? formatDMY(e.start_date) : "", e.end_date ? formatDMY(e.end_date) : "", tenure(e, now).label, e.end_date ? "left" : "active",
       ].join(","),
     );
   }

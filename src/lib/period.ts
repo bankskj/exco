@@ -55,6 +55,13 @@ export function shortLabel(period: string): string {
   return `${MONTHS[month - 1]} '${String(year).slice(2)}`;
 }
 
+/** 'YYYY-MM-DD' → 'DD/MM/YYYY' (SA convention); anything else → '—'. */
+export function formatDMY(iso: string | null | undefined): string {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
+}
+
 // --- Fiscal year (South African convention: March → end February) ---------
 // FY2026 = 2025-03 .. 2026-02. A period belongs to the FY it ends in.
 

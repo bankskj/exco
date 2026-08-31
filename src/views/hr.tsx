@@ -2,6 +2,7 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import { type HrEmployee, type HrNote, type HrDocument, type NoteKind, NOTE_KINDS, KIND_LABEL } from "../data/hr";
 import { hBars } from "../lib/charts";
+import { formatDMY } from "../lib/period";
 
 // ---- tenure helpers -------------------------------------------------------
 
@@ -20,7 +21,7 @@ export function tenure(e: HrEmployee, now: Date): { months: number; label: strin
   return { months: m, label };
 }
 
-const fmtDate = (d: string | null) => (d ? d : "—");
+const fmtDate = (d: string | null) => formatDMY(d);
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -112,7 +113,7 @@ export const HrDashboard: FC<{
                     <td class="muted">{e.manager || "—"}</td>
                     <td>{fmtDate(e.start_date)}</td>
                     <td>{tenure(e, now).label}</td>
-                    <td>{e.end_date ? <span class="badge cost">left {e.end_date}</span> : <span class="badge income">active</span>}</td>
+                    <td>{e.end_date ? <span class="badge cost">left {formatDMY(e.end_date)}</span> : <span class="badge income">active</span>}</td>
                     <td>{w > 0 ? <span class="badge kind-written_warning">⚠ {w}</span> : ""}</td>
                   </tr>
                 );
@@ -175,7 +176,7 @@ export const HrEmployeePage: FC<{
         <p style="margin:12px 0 0"><a href="/app/hr">← Headcount</a></p>
         <div class="row spread">
           <h1 style="margin-top:8px">{emp.name}</h1>
-          {emp.end_date ? <span class="badge cost" style="font-size:13px">left {emp.end_date}</span> : <span class="badge income" style="font-size:13px">active</span>}
+          {emp.end_date ? <span class="badge cost" style="font-size:13px">left {formatDMY(emp.end_date)}</span> : <span class="badge income" style="font-size:13px">active</span>}
         </div>
         <p class="muted" style="margin-top:0">
           {emp.position || "—"} · {emp.team || "no team"} · manager: {emp.manager || "—"}
@@ -241,7 +242,7 @@ export const HrEmployeePage: FC<{
                         <strong>{n.title}</strong>
                       </div>
                       <div class="row" style="gap:10px">
-                        <span class="muted" style="font-size:12px">{n.note_date ?? n.created_at.slice(0, 10)}</span>
+                        <span class="muted" style="font-size:12px">{formatDMY(n.note_date ?? n.created_at.slice(0, 10))}</span>
                         <form method="post" action="/app/hr/note/delete" style="margin:0"
                           onsubmit="return confirm('Delete this entry and its attachments?')">
                           <input type="hidden" name="id" value={n.id} />
