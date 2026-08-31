@@ -25,7 +25,7 @@ const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 import { ExpensesPage } from "./views/expenses";
 import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, listAllVendorBills, billingPatterns } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
-import { MonthlyExpensesPage, type MonthSummary, type VendorGroup } from "./views/monthly_expenses";
+import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
@@ -851,11 +851,18 @@ app.post("/app/expenses/sync", async (c) => {
 // ----- Monthly expense log -----
 
 app.get("/app/expenses/monthly", async (c) => {
-  const [bills, rules, names] = await Promise.all([
+  const [bills, rules, names, allExpenses] = await Promise.all([
     listAllVendorBills(c.env.DB),
     listVendorRules(c.env.DB),
     staffFirstNames(c.env.DB),
+    listExpenses(c.env.DB),
   ]);
+  // Manually captured recurring expenses have no Xero bills — add their
+  // monthly-equivalent charge to every month so the log is the whole business.
+  const manualItems: ManualItem[] = allExpenses
+    .filter((e) => e.source === "manual" && e.active)
+    .map((e) => ({ name: e.name, amount: monthlyEquivalent(e), frequency: e.frequency }));
+  const manualMonthly = manualItems.reduce((s, i) => s + i.amount, 0);
   // Staff/developer filter: rule-based payroll & contractor exclusions plus a
   // live name match. Manual "exclude" rules (non-recurring vendors) stay in
   // the log — they're still real expenses that month.
@@ -882,7 +889,14 @@ app.get("/app/expenses/monthly", async (c) => {
     m.vendors.add(b.vendor_key);
   }
   const months: MonthSummary[] = [...byMonth.entries()]
-    .map(([month, m]) => ({ month, total: m.total, billCount: m.billCount, vendorCount: m.vendors.size }))
+    .map(([month, m]) => ({
+      month,
+      billTotal: m.total,
+      manualTotal: manualMonthly,
+      total: m.total + manualMonthly,
+      billCount: m.billCount,
+      vendorCount: m.vendors.size,
+    }))
     .sort((a, b) => (a.month < b.month ? 1 : -1));
 
   const mRaw = c.req.query("m");
@@ -904,7 +918,7 @@ app.get("/app/expenses/monthly", async (c) => {
   }
   const currentMonth = new Date().toISOString().slice(0, 7);
   return c.html(
-    <MonthlyExpensesPage months={months} selected={selected} groups={groups} excludedCount={excludedKeys.size} currentMonth={currentMonth} />,
+    <MonthlyExpensesPage months={months} selected={selected} groups={groups} manualItems={selected ? manualItems : []} excludedCount={excludedKeys.size} currentMonth={currentMonth} />,
   );
 });
 
