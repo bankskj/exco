@@ -102,7 +102,24 @@ export const ExpensesPage: FC<{
                     </td>
                     <td class="muted">{e.category || "—"}</td>
                     <td class="num">{formatZAR(e.amount)}{e.currency !== "ZAR" ? <span class="muted"> {e.currency}</span> : null}</td>
-                    <td class="muted" style="font-size:12px">{e.frequency}</td>
+                    <td>
+                      <form method="post" action="/app/expenses/frequency" style="margin:0">
+                        <input type="hidden" name="id" value={e.id} />
+                        <input type="hidden" name="page" value={String(p)} />
+                        <input type="hidden" name="sort" value={sort} />
+                        <input type="hidden" name="dir" value={dir} />
+                        <select name="frequency" onchange="this.form.submit()"
+                          style="width:100%;padding:4px 6px;font-size:12px;background:transparent;border-color:transparent"
+                          title={e.frequency + (e.freq_locked ? " · manually set" : "")}>
+                          {FREQUENCIES.map((f) => (
+                            <option value={f.key} selected={Math.abs(e.interval_months - f.months) < 0.01}>
+                              {f.label}{e.freq_locked && Math.abs(e.interval_months - f.months) < 0.01 ? " 🔒" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {e.frequency.includes("detected") ? <div class="cellhint" style="text-align:left;padding-left:6px">{e.frequency.replace(/^[a-z]+ /, "")}</div> : null}
+                      </form>
+                    </td>
                     <td class="num"><strong>{formatZAR(monthlyEquivalent(e))}</strong></td>
                     <td>{e.next_date ? formatDMY(e.next_date) : "—"}</td>
                     <td>{e.source === "xero" ? <span class="badge recurring">xero</span> : <span class="badge actual">manual</span>}</td>

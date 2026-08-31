@@ -182,15 +182,46 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   return out.sort((a, b) => b.avgMonthly - a.avgMonthly);
 }
 
-/** Convert a vendor summary into the expense-upsert shape. */
+/**
+ * Convert a vendor summary into the expense-upsert shape, inferring the
+ * billing frequency from the pattern:
+ *   3+ billed months  → monthly, at average spend per billed month
+ *   2 billed months   → interval = the gap between them (quarterly etc.)
+ *   1 billed month    → assumed annual (one-off big subs); user can override
+ */
 export function vendorToBill(v: VendorSummary, monthsBack = 6): XeroRepeatingBill {
+  const monthsSorted = Object.keys(v.months).sort();
+  let frequency: string;
+  let interval_months: number;
+  let amount: number;
+
+  if (v.monthCount >= 3) {
+    frequency = `monthly (detected, ${v.monthCount}/${monthsBack} mo)`;
+    interval_months = 1;
+    amount = v.avgMonthly;
+  } else if (v.monthCount === 2) {
+    const [a, b] = monthsSorted;
+    const gap = Math.max(1, (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + (Number(b.slice(5, 7)) - Number(a.slice(5, 7))));
+    interval_months = gap;
+    frequency =
+      gap === 1 ? `monthly (detected, 2/${monthsBack} mo)`
+      : gap === 3 ? "quarterly (detected)"
+      : gap === 6 ? "biannual (detected)"
+      : `every ${gap} months (detected)`;
+    amount = Math.round((v.total / 2) * 100) / 100; // per occurrence
+  } else {
+    frequency = "annual (detected, 1 bill)";
+    interval_months = 12;
+    amount = Math.round(v.total * 100) / 100;
+  }
+
   return {
     xero_id: `vendor:${v.key}`,
     name: v.name,
     vendor: v.name,
-    amount: v.avgMonthly,
-    frequency: `monthly (detected, ${v.monthCount}/${monthsBack} mo)`,
-    interval_months: 1,
+    amount,
+    frequency,
+    interval_months,
     next_date: null,
     currency: v.currency,
   };

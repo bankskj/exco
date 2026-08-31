@@ -15,6 +15,7 @@ export type RecurringExpense = {
   source: "manual" | "xero";
   xero_id: string | null;
   currency: string;
+  freq_locked: number;
 };
 
 export const FREQUENCIES: { key: string; label: string; months: number }[] = [
@@ -31,7 +32,7 @@ export const monthlyEquivalent = (e: { amount: number; interval_months: number }
 export async function listExpenses(db: D1Database): Promise<RecurringExpense[]> {
   const { results } = await db
     .prepare(
-      "SELECT id, name, vendor, category, amount, frequency, interval_months, next_date, active, notes, source, xero_id, currency " +
+      "SELECT id, name, vendor, category, amount, frequency, interval_months, next_date, active, notes, source, xero_id, currency, freq_locked " +
         "FROM recurring_expenses ORDER BY active DESC, name COLLATE NOCASE ASC",
     )
     .all<RecurringExpense>();
@@ -59,6 +60,14 @@ export async function createExpense(
     .bind(id, e.name, e.vendor ?? null, e.category ?? null, e.amount, e.frequency, e.interval_months, e.next_date ?? null, e.notes ?? null)
     .run();
   return id;
+}
+
+/** Manually set a row's frequency; locks it against sync overwrites. */
+export async function setExpenseFrequency(db: D1Database, id: string, frequency: string, intervalMonths: number): Promise<void> {
+  await db
+    .prepare("UPDATE recurring_expenses SET frequency=?, interval_months=?, freq_locked=1, updated_at=datetime('now') WHERE id=?")
+    .bind(frequency, intervalMonths, id)
+    .run();
 }
 
 export async function toggleExpense(db: D1Database, id: string): Promise<void> {
@@ -103,10 +112,11 @@ export async function upsertXeroExpenses(db: D1Database, bills: XeroRepeatingBil
   let upd = 0;
   for (const b of bills) {
     const existing = await db
-      .prepare("SELECT id FROM recurring_expenses WHERE xero_id = ?")
+      .prepare("SELECT id, freq_locked FROM recurring_expenses WHERE xero_id = ?")
       .bind(b.xero_id)
-      .first<{ id: string }>();
+      .first<{ id: string; freq_locked: number }>();
     if (existing) {
+      if (existing.freq_locked) continue; // user set the frequency manually — leave the row alone
       await db
         .prepare(
           "UPDATE recurring_expenses SET name=?, vendor=?, amount=?, frequency=?, interval_months=?, next_date=?, currency=?, updated_at=datetime('now') WHERE id=?",

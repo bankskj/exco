@@ -23,7 +23,7 @@ import {
 const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 import { ExpensesPage } from "./views/expenses";
-import { listExpenses, createExpense, toggleExpense, deleteExpense, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId } from "./data/expenses";
+import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
 import { getAllMeta } from "./data/db";
@@ -672,6 +672,14 @@ function expenseListQs(b: Record<string, unknown>): string {
   if (["asc", "desc"].includes(String(b.dir))) q.set("dir", String(b.dir));
   return q.toString();
 }
+
+app.post("/app/expenses/frequency", async (c) => {
+  const b = await c.req.parseBody();
+  const id = String(b.id ?? "");
+  const freq = FREQUENCIES.find((f) => f.key === String(b.frequency));
+  if (id && freq) await setExpenseFrequency(c.env.DB, id, freq.key, freq.months);
+  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
+});
 
 app.post("/app/expenses/toggle", async (c) => {
   const b = await c.req.parseBody();
