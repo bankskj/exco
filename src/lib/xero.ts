@@ -183,6 +183,13 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   for (const src of sources)
   for (const inv of src.rows) {
     if (!src.statuses.includes(inv.Status)) continue;
+    // Bank rows: only spend money reconciled to a real payee. Generic
+    // "Bank Transaction" contacts are raw feed lines — transfers between own
+    // accounts, salary EFTs, SARS payments — not supplier expenses.
+    if (src.rows === bankTxns) {
+      const cn = String(inv.Contact?.Name ?? "").trim();
+      if (!cn || /^bank transaction$/i.test(cn)) continue;
+    }
     const key = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
     const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
     if (!month) continue;
