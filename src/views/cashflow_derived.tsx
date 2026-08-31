@@ -20,11 +20,10 @@ export const CashflowDerivedPage: FC<{
   settings: CFSettings;
   fy: number | null;
   fys: number[];
-  basis: "cash" | "accrual";
   collections: { month: string; invoiced: number; received: number; gap: number; stillDue: number | null }[];
   syncNote?: string;
   saved?: boolean;
-}> = ({ cf, settings, fy, fys, basis, collections, syncNote, saved }) => {
+}> = ({ cf, settings, fy, fys, collections, syncNote, saved }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const visible = cf.columns.filter((c) => inFy(c.month));
   const boundary = settings.actuals_through;
@@ -41,10 +40,8 @@ export const CashflowDerivedPage: FC<{
           <div>
             <h1 style="margin-top:12px">Accounts · Cashflow</h1>
             <p class="muted" style="margin-top:0">
-              {basis === "cash"
-                ? "Cash basis: money actually received and paid (Xero paymentsOnly P&L) — the truth for the bank balance."
-                : "Accrual basis: invoices raised and bills incurred — matches Xero's default P&L and the Income tab."}{" "}
-              Actuals through <strong>{label(boundary)}</strong>; forecast from the Payroll grid and the average of{" "}
+              Cash basis — money actually received and paid, the truth for the bank balance. For the P&L view that
+              matches Xero, use the <a href="/app/accounts/income">Income tab</a>. Actuals through <strong>{label(boundary)}</strong>; forecast from the Payroll grid and the average of{" "}
               {cf.avgBasis.map(label).join(", ") || "—"}.
             </p>
           </div>
@@ -57,17 +54,11 @@ export const CashflowDerivedPage: FC<{
         <AccountsTabs active="cashflow" />
 
         <div class="row spread section-block" style="align-items:center">
-          <div class="row" style="gap:10px">
-            <div class="segmented">
-              <a href={`/app/accounts?basis=cash${fy != null ? `&fy=${fy}` : ""}`} class={basis === "cash" ? "seg active" : "seg"} title="Money received / paid — drives the bank balance">Cash</a>
-              <a href={`/app/accounts?basis=accrual${fy != null ? `&fy=${fy}` : ""}`} class={basis === "accrual" ? "seg active" : "seg"} title="Invoiced / incurred — matches Xero's P&L">Accrual</a>
-            </div>
-            <div class="segmented">
-              <a href={`/app/accounts?basis=${basis}&fy=all`} class={fy == null ? "seg active" : "seg"}>All</a>
-              {fys.map((y) => (
-                <a href={`/app/accounts?basis=${basis}&fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
-              ))}
-            </div>
+          <div class="segmented">
+            <a href="/app/accounts?fy=all" class={fy == null ? "seg active" : "seg"}>All</a>
+            {fys.map((y) => (
+              <a href={`/app/accounts?fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
+            ))}
           </div>
           <form method="post" action="/app/accounts/actuals-through" class="row" style="gap:8px;margin:0">
             <label style="margin:0">Books complete through</label>
@@ -146,7 +137,7 @@ export const CashflowDerivedPage: FC<{
               <thead>
                 <tr>
                   <th style="text-align:left">Month</th><th>Income (P&amp;L)</th><th>People (salaries + contractors)</th>
-                  <th>Other expenses</th><th>{basis === "cash" ? "SARS (cash)" : "SARS (n/a accrual)"}</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
+                  <th>Other expenses</th><th>SARS (cash)</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
                 </tr>
               </thead>
               <tbody>

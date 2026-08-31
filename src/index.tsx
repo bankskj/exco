@@ -436,8 +436,8 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
 }
 
 app.get("/app/accounts", async (c) => {
-  const basis = c.req.query("basis") === "accrual" ? "accrual" as const : "cash" as const;
-  const { settings, cf, syncNote, collections } = await loadDerived(c.env, basis);
+  // Cashflow is cash-basis only: the accrual P&L (matching Xero) lives on the Income tab.
+  const { settings, cf, syncNote, collections } = await loadDerived(c.env, "cash");
   const fyRaw = c.req.query("fy");
   let [fys, fy] = parseFy(cf.months, fyRaw);
   // Default to the current fiscal year on first load; ?fy=all shows everything.
@@ -446,7 +446,7 @@ app.get("/app/accounts", async (c) => {
     if (fys.includes(curFy)) fy = curFy;
   }
   const visibleCollections = fy == null ? collections : collections.filter((r) => fiscalYearOf(r.month) === fy);
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} collections={visibleCollections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
