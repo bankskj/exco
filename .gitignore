@@ -11,4 +11,4 @@ dist/
 *.xlsx
 *.xls
 *.csv
-data/
+/data/
