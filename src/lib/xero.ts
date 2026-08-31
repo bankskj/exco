@@ -21,6 +21,7 @@ export type XeroState = {
   connected: boolean; // refresh token stored
   orgName: string | null;
   lastSync: string | null;
+  callbackUrl: string; // the exact redirect_uri this deployment sends to Xero
 };
 
 export function authUrl(clientId: string, redirectUri: string, state: string): string {

@@ -152,14 +152,22 @@ const XeroCard: FC<{ xero: XeroState }> = ({ xero }) => (
         <pre style="background:#0c0f14;border:1px solid var(--border);border-radius:10px;padding:14px;font-size:13px;overflow-x:auto">npx wrangler secret put XERO_CLIENT_ID
 npx wrangler secret put XERO_CLIENT_SECRET</pre>
         <p class="muted" style="font-size:12px;margin:10px 0 0">
-          In the Xero developer portal, the app's redirect URI must include: <code>https://exco.elula.workers.dev/app/xero/callback</code>
+          In the Xero developer portal, the app's redirect URI must include (exactly): <code>{xero.callbackUrl}</code>
         </p>
       </div>
     ) : !xero.connected ? (
-      <p class="muted" style="margin:12px 0 0">
-        Credentials are set. Click <strong>Connect Xero</strong>, sign in, and pick the organisation — then Sync pulls
-        all authorised repeating bills (ACCPAY) in as expenses.
-      </p>
+      <div style="margin-top:12px">
+        <p class="muted" style="margin:0 0 10px">
+          Credentials are set. Before connecting, make sure this <strong>exact</strong> redirect URI is saved in your
+          Xero app (developer.xero.com → My Apps → your app → Configuration → Redirect URIs):
+        </p>
+        <pre style="background:#0c0f14;border:1px solid var(--border);border-radius:10px;padding:14px;font-size:13px;overflow-x:auto">{xero.callbackUrl}</pre>
+        <p class="muted" style="font-size:12px;margin:10px 0 0">
+          No trailing slash, https, exact match — Xero rejects anything else with “Invalid redirect_uri”. Then click
+          <strong> Connect Xero</strong>, sign in, and pick the organisation; Sync pulls authorised repeating bills in
+          as expenses.
+        </p>
+      </div>
     ) : (
       <p class="muted" style="margin:12px 0 0">
         Sync upserts by Xero ID: amounts, schedules and next dates refresh; rows you've paused stay paused. Manual

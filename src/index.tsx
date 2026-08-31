@@ -623,6 +623,7 @@ async function xeroState(c: any): Promise<import("./lib/xero").XeroState> {
     connected: configured && Boolean(m.xero_refresh_token),
     orgName: m.xero_org_name ?? null,
     lastSync: m.xero_last_sync ?? null,
+    callbackUrl: redirectUri(c),
   };
 }
 
@@ -680,7 +681,11 @@ app.get("/app/expenses/export.csv", async (c) => {
 // ----- Xero OAuth flow -----
 
 function redirectUri(c: any): string {
-  return new URL(c.req.url).origin + "/app/xero/callback";
+  // Workers can report the scheme as http even for HTTPS requests — and Xero
+  // only accepts https redirect URIs (http is allowed for localhost only).
+  const u = new URL(c.req.url);
+  const proto = u.hostname === "localhost" || u.hostname === "127.0.0.1" ? "http" : "https";
+  return `${proto}://${u.host}/app/xero/callback`;
 }
 
 app.get("/app/xero/connect", async (c) => {
