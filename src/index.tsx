@@ -92,6 +92,25 @@ app.post("/logout", (c) => {
 
 app.get("/healthz", (c) => c.json({ ok: true }));
 
+// Temporary Xero OAuth diagnostic (no secret values exposed).
+app.get("/xero/diag", (c) => {
+  const id = c.env.XERO_CLIENT_ID ?? "";
+  const secret = c.env.XERO_CLIENT_SECRET ?? "";
+  return c.json({
+    redirect_uri_sent: redirectUri(c),
+    request_url_scheme: new URL(c.req.url).protocol,
+    client_id: {
+      set: id.length > 0,
+      length: id.length,
+      trimmed_length: id.trim().length,
+      has_whitespace: id !== id.trim(),
+      prefix: id.trim().slice(0, 2),
+      suffix: id.trim().slice(-2),
+    },
+    client_secret: { set: secret.length > 0, length: secret.length, has_whitespace: secret !== secret.trim() },
+  });
+});
+
 // --- Protected -----------------------------------------------------------
 
 app.use("/app", requireAuth);
@@ -698,7 +717,7 @@ app.get("/app/xero/connect", async (c) => {
     sameSite: "Lax",
     maxAge: 600,
   });
-  return c.redirect(authUrl(c.env.XERO_CLIENT_ID, redirectUri(c), state));
+  return c.redirect(authUrl(c.env.XERO_CLIENT_ID.trim(), redirectUri(c), state));
 });
 
 app.get("/app/xero/callback", async (c) => {
@@ -711,7 +730,7 @@ app.get("/app/xero/callback", async (c) => {
     return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero connection failed (state mismatch) — try again.")}`);
   }
   try {
-    const tokens = await exchangeCode(c.env.XERO_CLIENT_ID!, c.env.XERO_CLIENT_SECRET!, code, redirectUri(c));
+    const tokens = await exchangeCode(c.env.XERO_CLIENT_ID!.trim(), c.env.XERO_CLIENT_SECRET!.trim(), code, redirectUri(c));
     await persistTokens(c.env.DB, tokens);
     const conns = await fetchConnections(tokens.access_token);
     if (conns.length === 0) throw new Error("no organisations authorised");
@@ -733,7 +752,7 @@ app.post("/app/xero/disconnect", async (c) => {
 app.post("/app/expenses/sync", async (c) => {
   if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
   try {
-    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID, c.env.XERO_CLIENT_SECRET);
+    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID.trim(), c.env.XERO_CLIENT_SECRET.trim());
     if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Not connected to Xero yet.")}`);
     const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
     if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation selected — reconnect.")}`);
