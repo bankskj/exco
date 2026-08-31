@@ -14,14 +14,20 @@ const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = (
   </div>
 );
 
+const PAGE_SIZE = 20;
+
 export const ExpensesPage: FC<{
   expenses: RecurringExpense[];
   xero: XeroState;
+  page: number;
   msg?: string;
-}> = ({ expenses, xero, msg }) => {
+}> = ({ expenses, xero, page, msg }) => {
   const active = expenses.filter((e) => e.active);
   const monthlyTotal = active.reduce((s, e) => s + monthlyEquivalent(e), 0);
   const fromXero = active.filter((e) => e.source === "xero").length;
+  const pageCount = Math.max(1, Math.ceil(expenses.length / PAGE_SIZE));
+  const p = Math.min(Math.max(1, page), pageCount);
+  const rows = expenses.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE);
 
   const byCategory = (() => {
     const m = new Map<string, number>();
@@ -51,48 +57,73 @@ export const ExpensesPage: FC<{
 
         <XeroCard xero={xero} />
 
+        <div class="section-block">
+          <div class="tablewrap">
+            <table class="grid fixed wrap">
+              <colgroup>
+                <col style="width:24%" />
+                <col style="width:12%" />
+                <col style="width:11%" />
+                <col style="width:15%" />
+                <col style="width:11%" />
+                <col style="width:9%" />
+                <col style="width:7%" />
+                <col style="width:11%" />
+              </colgroup>
+              <thead>
+                <tr><th style="text-align:left">Expense</th><th>Category</th><th>Amount</th><th>Frequency</th><th>Monthly equiv</th><th>Next</th><th>Source</th><th></th></tr>
+              </thead>
+              <tbody>
+                {rows.map((e) => (
+                  <tr style={e.active ? "" : "opacity:.45"}>
+                    <td style="text-align:left">
+                      {e.name}
+                      {e.vendor && e.vendor !== e.name ? <div class="muted" style="font-size:11px">{e.vendor}</div> : null}
+                    </td>
+                    <td class="muted">{e.category || "—"}</td>
+                    <td class="num">{formatZAR(e.amount)}{e.currency !== "ZAR" ? <span class="muted"> {e.currency}</span> : null}</td>
+                    <td class="muted" style="font-size:12px">{e.frequency}</td>
+                    <td class="num"><strong>{formatZAR(monthlyEquivalent(e))}</strong></td>
+                    <td>{e.next_date ? formatDMY(e.next_date) : "—"}</td>
+                    <td>{e.source === "xero" ? <span class="badge recurring">xero</span> : <span class="badge actual">manual</span>}</td>
+                    <td>
+                      <div class="row" style="gap:6px;justify-content:flex-end">
+                        <form method="post" action="/app/expenses/toggle" style="margin:0">
+                          <input type="hidden" name="id" value={e.id} />
+                          <input type="hidden" name="page" value={String(p)} />
+                          <button class="btn btn-sm" type="submit">{e.active ? "Pause" : "Resume"}</button>
+                        </form>
+                        <form method="post" action="/app/expenses/delete" style="margin:0"
+                          onsubmit="return confirm('Delete this expense?')">
+                          <input type="hidden" name="id" value={e.id} />
+                          <input type="hidden" name="page" value={String(p)} />
+                          <button class="btn btn-sm btn-danger" type="submit">✕</button>
+                        </form>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                <tr class="total">
+                  <td style="text-align:left">Total — all active ({active.length})</td>
+                  <td></td><td></td><td></td>
+                  <td class="num">{formatZAR(monthlyTotal)}</td>
+                  <td></td><td></td><td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {pageCount > 1 ? (
+            <div class="pager">
+              {p > 1 ? <a class="btn btn-sm" href={`/app/expenses?page=${p - 1}`}>← Prev</a> : null}
+              <span class="muted">Page {p} of {pageCount} · {expenses.length} expenses</span>
+              {p < pageCount ? <a class="btn btn-sm" href={`/app/expenses?page=${p + 1}`}>Next →</a> : null}
+            </div>
+          ) : null}
+        </div>
+
         <div class="grid section-block" style="grid-template-columns:1.5fr 1fr;gap:18px">
           <div>
-            <div class="tablewrap">
-              <table class="grid">
-                <thead>
-                  <tr><th>Expense</th><th>Vendor</th><th>Category</th><th>Amount</th><th>Frequency</th><th>Monthly equiv</th><th>Next</th><th>Source</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {expenses.map((e) => (
-                    <tr style={e.active ? "" : "opacity:.45"}>
-                      <td>{e.name}</td>
-                      <td class="muted">{e.vendor || "—"}</td>
-                      <td class="muted">{e.category || "—"}</td>
-                      <td class="num">{formatZAR(e.amount)}{e.currency !== "ZAR" ? <span class="muted"> {e.currency}</span> : null}</td>
-                      <td>{e.frequency}</td>
-                      <td class="num">{formatZAR(monthlyEquivalent(e))}</td>
-                      <td>{e.next_date ? formatDMY(e.next_date) : "—"}</td>
-                      <td>{e.source === "xero" ? <span class="badge recurring">xero</span> : <span class="badge actual">manual</span>}</td>
-                      <td>
-                        <div class="row" style="gap:6px">
-                          <form method="post" action="/app/expenses/toggle" style="margin:0">
-                            <input type="hidden" name="id" value={e.id} />
-                            <button class="btn btn-sm" type="submit">{e.active ? "Pause" : "Resume"}</button>
-                          </form>
-                          <form method="post" action="/app/expenses/delete" style="margin:0"
-                            onsubmit="return confirm('Delete this expense?')">
-                            <input type="hidden" name="id" value={e.id} />
-                            <button class="btn btn-sm btn-danger" type="submit">✕</button>
-                          </form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  <tr class="total">
-                    <td>Total (active)</td><td></td><td></td><td></td><td></td>
-                    <td class="num">{formatZAR(monthlyTotal)}</td><td></td><td></td><td></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="card section-block">
+            <div class="card">
               <h3>Add expense</h3>
               <form method="post" action="/app/expenses/add" class="formgrid">
                 <div><label>Name</label><input type="text" name="name" required placeholder="e.g. Google Workspace" /></div>

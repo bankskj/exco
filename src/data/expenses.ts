@@ -32,7 +32,7 @@ export async function listExpenses(db: D1Database): Promise<RecurringExpense[]> 
   const { results } = await db
     .prepare(
       "SELECT id, name, vendor, category, amount, frequency, interval_months, next_date, active, notes, source, xero_id, currency " +
-        "FROM recurring_expenses ORDER BY active DESC, (amount / interval_months) DESC",
+        "FROM recurring_expenses ORDER BY active DESC, name COLLATE NOCASE ASC",
     )
     .all<RecurringExpense>();
   return results ?? [];

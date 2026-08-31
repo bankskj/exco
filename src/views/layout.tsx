@@ -99,6 +99,9 @@ table.grid td.num { font-variant-numeric: tabular-nums; }
 table.grid tr.total td { font-weight: 700; border-top: 2px solid var(--border); background: var(--panel-2); }
 table.grid tr.group td { background: #12161d; color: var(--muted); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .5px; }
 table.grid.fixed { table-layout: fixed; }
+table.grid.wrap th, table.grid.wrap td { white-space: normal; overflow-wrap: break-word; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; font-size: 13px; }
+.pager .muted { margin: 0 6px; }
 table.grid input { width: 92px; padding: 5px 7px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
 table.grid.fixed input { width: 100%; }
 table.grid td, table.grid th { overflow: hidden; text-overflow: ellipsis; }

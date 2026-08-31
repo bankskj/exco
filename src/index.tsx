@@ -632,7 +632,9 @@ async function xeroState(c: any): Promise<import("./lib/xero").XeroState> {
 app.get("/app/expenses", async (c) => {
   const [expenses, xero] = await Promise.all([listExpenses(c.env.DB), xeroState(c)]);
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
-  return c.html(<ExpensesPage expenses={expenses} xero={xero} msg={msg} />);
+  const pageN = Number(c.req.query("page"));
+  const page = Number.isFinite(pageN) && pageN >= 1 ? Math.trunc(pageN) : 1;
+  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} msg={msg} />);
 });
 
 app.post("/app/expenses/add", async (c) => {
@@ -657,13 +659,15 @@ app.post("/app/expenses/add", async (c) => {
 app.post("/app/expenses/toggle", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await toggleExpense(c.env.DB, String(b.id));
-  return c.redirect("/app/expenses");
+  const pg = /^\d+$/.test(String(b.page)) ? `?page=${b.page}` : "";
+  return c.redirect(`/app/expenses${pg}`);
 });
 
 app.post("/app/expenses/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteExpense(c.env.DB, String(b.id));
-  return c.redirect("/app/expenses");
+  const pg = /^\d+$/.test(String(b.page)) ? `?page=${b.page}` : "";
+  return c.redirect(`/app/expenses${pg}`);
 });
 
 app.get("/app/expenses/export.csv", async (c) => {
