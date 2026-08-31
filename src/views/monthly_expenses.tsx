@@ -53,6 +53,13 @@ export const MonthlyExpensesPage: FC<{
 
         <ExpenseTabs active="monthly" />
 
+        <div class="callout section-block">
+          <strong>What this covers:</strong> supplier bills and direct bank payments (spend money) from Xero, plus
+          manual recurring entries. <strong>Not included:</strong> salaries and dev/contractor pay — those live in{" "}
+          <a href="/app/payroll">Payroll</a>. Total business outflow ≈ this log + payroll nett. Recent months read low
+          until the bookkeeping in Xero catches up.
+        </div>
+
         <div class="kpis section-block">
           <Kpi label={`Latest full month — ${latest ? label(latest.month) : "—"}`} value={formatZAR(latest?.total ?? 0)}
             sub={latest ? `${latest.billCount} bills · ${latest.vendorCount} vendors` : undefined} />

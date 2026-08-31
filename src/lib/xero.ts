@@ -12,7 +12,7 @@ const REPEATING_URL = "https://api.xero.com/api.xro/2.0/RepeatingInvoices";
 // Repeating bills are invoice-family objects → accounting.invoices.read;
 // contacts.read for embedded vendor names; settings.read for org info;
 // offline_access for refresh tokens.
-export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.contacts.read accounting.settings.read";
+export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.contacts.read accounting.settings.read";
 
 export type XeroTokens = {
   access_token: string;
@@ -142,14 +142,33 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   const sinceM = now.getUTCMonth() + 1 - monthsBack;
   const y = sinceM >= 1 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
   const m = ((sinceM - 1 + 12) % 12) + 1;
+  const hdrs = { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" };
   const q = new URLSearchParams({
     where: `Type=="ACCPAY" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
   });
-  const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, {
-    headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
-  });
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, { headers: hdrs });
   if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as any;
+
+  // Spend-money bank transactions: direct payments that never become bills.
+  // Paged fetch; tolerated to fail (e.g. before the scope is re-consented).
+  const bankTxns: any[] = [];
+  try {
+    for (let page = 1; page <= 10; page++) {
+      const bq = new URLSearchParams({
+        where: `Type=="SPEND" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
+        page: String(page),
+      });
+      const bres = await fetch(`https://api.xero.com/api.xro/2.0/BankTransactions?${bq.toString()}`, { headers: hdrs });
+      if (!bres.ok) break;
+      const bdata = (await bres.json()) as any;
+      const list = bdata.BankTransactions ?? [];
+      bankTxns.push(...list);
+      if (list.length < 100) break;
+    }
+  } catch {
+    // bank-transaction scope not granted yet — bills-only summary
+  }
 
   // Ignore mis-captured dates (e.g. a bill typed as year 3107) — anything
   // outside the fetch window up to the end of the current month.
@@ -157,8 +176,13 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   const currentMonth = now.toISOString().slice(0, 7);
 
   const byVendor = new Map<string, VendorSummary>();
-  for (const inv of data.Invoices ?? []) {
-    if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
+  const sources: { rows: any[]; statuses: string[]; refField: (r: any) => string | null }[] = [
+    { rows: data.Invoices ?? [], statuses: ["AUTHORISED", "PAID"], refField: (r) => (r.InvoiceNumber ? String(r.InvoiceNumber) : r.Reference ? String(r.Reference) : null) },
+    { rows: bankTxns, statuses: ["AUTHORISED"], refField: (r) => (r.Reference ? `(bank) ${r.Reference}` : "(bank)") },
+  ];
+  for (const src of sources)
+  for (const inv of src.rows) {
+    if (!src.statuses.includes(inv.Status)) continue;
     const key = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
     const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
     if (!month) continue;
@@ -182,7 +206,7 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
     v.months[month] = (v.months[month] ?? 0) + amt;
     v.total += amt;
     v.billCount++;
-    if (fullDate) v.bills.push({ date: fullDate, amount: amt, reference: inv.InvoiceNumber ? String(inv.InvoiceNumber) : inv.Reference ? String(inv.Reference) : null });
+    if (fullDate) v.bills.push({ date: fullDate, amount: amt, reference: src.refField(inv) });
   }
   const out = [...byVendor.values()];
   for (const v of out) {
