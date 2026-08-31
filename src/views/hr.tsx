@@ -214,12 +214,14 @@ export const HrEmployeePage: FC<{
                 <div class="formgrid">
                   <div><label>Type</label>
                     <select name="kind">
-                      {NOTE_KINDS.map((k) => <option value={k}>{KIND_LABEL[k]}</option>)}
+                      {[...NOTE_KINDS]
+                        .sort((a, b) => KIND_LABEL[a].localeCompare(KIND_LABEL[b]))
+                        .map((k) => <option value={k} selected={k === "note"}>{KIND_LABEL[k]}</option>)}
                     </select>
                   </div>
                   <div><label>Date</label><input type="date" name="note_date" value={now.toISOString().slice(0, 10)} /></div>
                   <div class="full"><label>Title</label><input type="text" name="title" required placeholder="e.g. Signed 2026 contract / Exceeded Q2 targets / Late delivery discussion" /></div>
-                  <div class="full"><label>Details</label><textarea name="body" rows={3} style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:#0c0f14;color:var(--text);font-size:14px;font-family:inherit"></textarea></div>
+                  <div class="full"><label>Details</label><textarea name="body" rows={3}></textarea></div>
                   <div class="full"><label>Attachments (documents / images)</label><input type="file" name="files" multiple style="font-size:13px" /></div>
                   <div><button class="btn btn-primary" type="submit">Add entry</button></div>
                 </div>

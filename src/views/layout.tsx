@@ -15,6 +15,7 @@ const CSS = `
   --shadow: 0 8px 30px rgba(0,0,0,.35);
 }
 * { box-sizing: border-box; }
+html { color-scheme: dark; } /* native controls (date pickers, selects, file inputs) render dark */
 html, body { margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -53,10 +54,17 @@ a:hover { text-decoration: underline; }
 div.grid { display: grid; gap: 18px; }
 @media (min-width: 720px) { div.grid-3 { grid-template-columns: repeat(3, 1fr); } }
 label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
-input[type=password], input[type=text] {
+input[type=password], input[type=text], input[type=date] {
   width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
-  background: #0c0f14; color: var(--text); font-size: 15px;
+  background: #0c0f14; color: var(--text); font-size: 15px; font-family: inherit;
 }
+input[type=date] { padding: 10px 12px; font-size: 14px; }
+input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
+textarea {
+  width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: #0c0f14; color: var(--text); font-size: 14px; font-family: inherit;
+}
+textarea:focus { outline: none; border-color: var(--accent); }
 input:focus { outline: none; border-color: var(--accent); }
 .error { color: var(--danger); font-size: 14px; margin-top: 10px; }
 .footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0 24px; }
