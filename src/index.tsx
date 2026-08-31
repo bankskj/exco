@@ -828,13 +828,27 @@ async function runXeroSync(env: Bindings): Promise<string> {
     if (track) bills.push(vendorToBill(v, SYNC_MONTHS_BACK));
   }
   const [ins, upd] = await upsertXeroExpenses(env.DB, bills);
+  // Prune stale xero rows: vendors that no longer appear in the sync output
+  // (vanished from the window, lapsed below threshold, or filtered as
+  // transfers/etc). Without this, one bad import lingers forever.
+  const validIds = new Set(bills.map((b) => b.xero_id));
+  const { results: existingRows } = await env.DB
+    .prepare("SELECT id, xero_id FROM recurring_expenses WHERE source = 'xero'")
+    .all<{ id: string; xero_id: string | null }>();
+  let pruned = 0;
+  for (const r of existingRows ?? []) {
+    if (r.xero_id && !validIds.has(r.xero_id)) {
+      await env.DB.prepare("DELETE FROM recurring_expenses WHERE id = ?").bind(r.id).run();
+      pruned++;
+    }
+  }
   // Refresh the per-vendor bill history that powers the expense drawers.
   await replaceVendorBills(
     env.DB,
     summary.flatMap((v) => v.bills.map((b) => ({ vendor_key: v.key, vendor_name: v.name, bill_date: b.date, amount: b.amount, reference: b.reference }))),
   );
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
-  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated.`;
+  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.`;
   await setMeta(env.DB, "xero_last_sync_result", msg);
   return msg;
 }
