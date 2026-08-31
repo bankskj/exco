@@ -100,9 +100,11 @@ app.get("/app/payroll/capture", async (c) => {
   const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(24, Math.trunc(monthsRaw))) : 14;
   const mRaw = c.req.query("metric");
   const metric = mRaw === "paye" || mRaw === "nett" ? mRaw : "gross";
+  const tRaw = c.req.query("type");
+  const typeFilter = EMPLOYEE_TYPES.includes(tRaw as any) ? (tRaw as (typeof EMPLOYEE_TYPES)[number]) : null;
   const gridPeriods = seq(from, months);
   return c.html(
-    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} metric={metric} saved={c.req.query("saved") === "1"} />,
+    <PayrollCapturePage employees={employees} report={report} gridPeriods={gridPeriods} from={from} months={months} metric={metric} typeFilter={typeFilter} saved={c.req.query("saved") === "1"} />,
   );
 });
 
@@ -132,7 +134,11 @@ app.post("/app/payroll/save", async (c) => {
     changed = true;
   }
   if (changed) await pruneEmptyEntries(c.env.DB);
-  return c.redirect(`/app/payroll/capture?metric=${field}&saved=1`);
+  const keep = new URLSearchParams({ metric: field, saved: "1" });
+  if (EMPLOYEE_TYPES.includes(String(body.type) as any)) keep.set("type", String(body.type));
+  if (isPeriod(String(body.from))) keep.set("from", String(body.from));
+  if (/^\d{1,2}$/.test(String(body.months))) keep.set("months", String(body.months));
+  return c.redirect(`/app/payroll/capture?${keep.toString()}`);
 });
 
 app.post("/app/payroll/employee", async (c) => {

@@ -191,7 +191,7 @@ function fyOptions(report: PayrollReport): number[] {
   return [...fys].sort((a, b) => a - b);
 }
 
-/** Capture view — metric toggle (gross/PAYE/nett), month-range control, fixed-layout grid. */
+/** Capture view — metric + type toggles, month-range control, fixed-layout grid. */
 export const PayrollCapturePage: FC<{
   employees: Employee[];
   report: PayrollReport;
@@ -199,18 +199,26 @@ export const PayrollCapturePage: FC<{
   from: string;
   months: number;
   metric: Metric;
+  typeFilter: EmployeeType | null;
   saved?: boolean;
-}> = ({ employees, report, gridPeriods, from, months, metric, saved }) => {
+}> = ({ employees, report, gridPeriods, from, months, metric, typeFilter, saved }) => {
+  const visible = typeFilter ? employees.filter((e) => e.type === typeFilter) : employees;
   const cellVal = (empId: string, p: string) => report.matrix.get(empId)?.get(p);
   const colTotal = (p: string) =>
-    employees.reduce((sum, e) => {
+    visible.reduce((sum, e) => {
       const c = cellVal(e.id, p);
       if (!c) return sum;
       return sum + (metric === "gross" ? c.gross : metric === "paye" ? c.paye : c.gross - c.paye);
     }, 0);
 
-  const metricLink = (m: Metric) =>
-    `/app/payroll/capture?metric=${m}&from=${encodeURIComponent(from)}&months=${months}`;
+  const qs = (over: Partial<{ metric: string; type: string; from: string; months: number }>) => {
+    const v = { metric, type: typeFilter ?? "", from, months, ...over };
+    const parts = [`metric=${v.metric}`];
+    if (v.type) parts.push(`type=${v.type}`);
+    parts.push(`from=${encodeURIComponent(v.from)}`, `months=${v.months}`);
+    return `/app/payroll/capture?${parts.join("&")}`;
+  };
+  const metricLink = (m: Metric) => qs({ metric: m });
 
   return (
     <Layout title="Payroll · Capture" authed section="payroll" wide>
@@ -239,16 +247,24 @@ export const PayrollCapturePage: FC<{
                 const start = `${y - 1}-03`;
                 const active = from === start && months === 12;
                 return (
-                  <a href={`/app/payroll/capture?metric=${metric}&from=${start}&months=12`}
-                    class={active ? "seg active" : "seg"} title={fyRangeLabel(y)}>
+                  <a href={qs({ from: start, months: 12 })} class={active ? "seg active" : "seg"} title={fyRangeLabel(y)}>
                     {fyLabel(y)}
                   </a>
                 );
               })}
             </div>
+            <div class="segmented">
+              <a href={qs({ type: "" })} class={typeFilter == null ? "seg active" : "seg"}>All</a>
+              {EMPLOYEE_TYPES.map((t) => (
+                <a href={qs({ type: t })} class={typeFilter === t ? "seg active" : "seg"} title={TYPE_LABEL[t]}>
+                  {t === "za" ? "ZA" : t === "international" ? "Intl" : "Freelance"}
+                </a>
+              ))}
+            </div>
           </div>
           <form method="get" action="/app/payroll/capture" class="row" style="gap:8px">
             <input type="hidden" name="metric" value={metric} />
+            {typeFilter ? <input type="hidden" name="type" value={typeFilter} /> : null}
             <label style="margin:0">From</label>
             <input type="text" name="from" value={from} placeholder="YYYY-MM" style="width:110px" />
             <label style="margin:0 0 0 6px">Show</label>
@@ -272,6 +288,9 @@ export const PayrollCapturePage: FC<{
 
         <form method="post" action="/app/payroll/save">
           <input type="hidden" name="metric" value={metric} />
+          {typeFilter ? <input type="hidden" name="type" value={typeFilter} /> : null}
+          <input type="hidden" name="from" value={from} />
+          <input type="hidden" name="months" value={String(months)} />
           <div class="tablewrap section-block">
             <table class="grid fixed" style={`min-width:${400 + gridPeriods.length * 100}px`}>
               <colgroup>
@@ -289,7 +308,7 @@ export const PayrollCapturePage: FC<{
                 </tr>
               </thead>
               <tbody>
-                {employees.map((e) => {
+                {visible.map((e) => {
                   const payeDisabled = metric === "paye" && !hasPaye(e.type);
                   return (
                     <tr>
@@ -317,7 +336,7 @@ export const PayrollCapturePage: FC<{
                   );
                 })}
                 <tr class="total">
-                  <td>Total {metric}</td>
+                  <td>Total {metric}{typeFilter ? ` · ${TYPE_LABEL[typeFilter]}` : ""}</td>
                   <td></td>
                   <td></td>
                   {gridPeriods.map((p) => <td class="num">{formatZAR(colTotal(p))}</td>)}
