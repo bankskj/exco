@@ -369,7 +369,7 @@ async function loadCashflow(db: D1Database) {
 const OVERRIDE_GRP = "__override__";
 const OVERRIDE_NAMES = ["Income", "People", "Other expenses"];
 
-async function loadDerived(env: Bindings) {
+async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const [settings, actuals, payrollEntries, allExpenses, categories, entries, synced] = await Promise.all([
     getSettings(env.DB),
     listCfActuals(env.DB),
@@ -410,7 +410,10 @@ async function loadDerived(env: Bindings) {
       adjById.get(e.category_id)?.values.set(e.period, e.amount);
     }
   }
-  const cf = buildDerivedCashflow(actuals, payrollByMonth, manualMonthly, settings, overrides, adjRows, sarsByMonth);
+  const actualsForBasis = basis === "cash"
+    ? actuals
+    : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map());
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
     : undefined;
@@ -418,9 +421,10 @@ async function loadDerived(env: Bindings) {
 }
 
 app.get("/app/accounts", async (c) => {
-  const { settings, cf, syncNote } = await loadDerived(c.env);
+  const basis = c.req.query("basis") === "accrual" ? "accrual" as const : "cash" as const;
+  const { settings, cf, syncNote } = await loadDerived(c.env, basis);
   const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
@@ -895,13 +899,15 @@ async function runXeroSync(env: Bindings): Promise<string> {
     const fy = fiscalYearOf(nowMonth);
     const curStart = `${fy - 1}-03`;
     const curCount = monthsBetweenIncl(curStart, nowMonth);
-    const [curPnl, priorPnl] = await Promise.all([
-      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, true), // cash basis
+    const [cashCur, cashPrior, accrCur, accrPrior] = await Promise.all([
+      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, true),
       fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12, true).catch(() => null),
+      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, false),
+      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12, false).catch(() => null),
     ]);
-    const rows: CfActual[] = [];
-    for (const pnl of [priorPnl, curPnl]) {
-      if (!pnl) continue;
+    const bucketed = (pnl: PnL | null): Map<string, { income: number; staff: number; dev: number; other: number }> => {
+      const out = new Map<string, { income: number; staff: number; dev: number; other: number }>();
+      if (!pnl) return out;
       pnl.months.forEach((month, i) => {
         let staff = 0, dev = 0, other = 0;
         for (const r of [...pnl.cosRows, ...pnl.opexRows]) {
@@ -910,9 +916,17 @@ async function runXeroSync(env: Bindings): Promise<string> {
           else if (DEV_RE.test(r.name)) dev += v;
           else other += v;
         }
-        rows.push({ month, income: pnl.incomeTotal[i] ?? 0, staff, dev, other });
+        out.set(month, { income: pnl.incomeTotal[i] ?? 0, staff, dev, other });
       });
-    }
+      return out;
+    };
+    const cash = new Map([...bucketed(cashPrior), ...bucketed(cashCur)]);
+    const accr = new Map([...bucketed(accrPrior), ...bucketed(accrCur)]);
+    const rows: CfActual[] = [...new Set([...cash.keys(), ...accr.keys()])].map((month) => {
+      const c = cash.get(month) ?? { income: 0, staff: 0, dev: 0, other: 0 };
+      const a = accr.get(month) ?? { income: 0, staff: 0, dev: 0, other: 0 };
+      return { month, income: c.income, staff: c.staff, dev: c.dev, other: c.other, income_accr: a.income, staff_accr: a.staff, dev_accr: a.dev, other_accr: a.other };
+    });
     await upsertCfActuals(env.DB, rows);
     await setMeta(env.DB, "cf_actuals_synced", new Date().toISOString());
   } catch {
