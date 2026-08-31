@@ -63,7 +63,7 @@ export const CashflowDerivedPage: FC<{
               <a href={`/app/accounts?basis=accrual${fy != null ? `&fy=${fy}` : ""}`} class={basis === "accrual" ? "seg active" : "seg"} title="Invoiced / incurred — matches Xero's P&L">Accrual</a>
             </div>
             <div class="segmented">
-              <a href={`/app/accounts?basis=${basis}`} class={fy == null ? "seg active" : "seg"}>All</a>
+              <a href={`/app/accounts?basis=${basis}&fy=all`} class={fy == null ? "seg active" : "seg"}>All</a>
               {fys.map((y) => (
                 <a href={`/app/accounts?basis=${basis}&fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
               ))}

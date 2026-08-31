@@ -433,7 +433,13 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
 app.get("/app/accounts", async (c) => {
   const basis = c.req.query("basis") === "accrual" ? "accrual" as const : "cash" as const;
   const { settings, cf, syncNote, collections } = await loadDerived(c.env, basis);
-  const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
+  const fyRaw = c.req.query("fy");
+  let [fys, fy] = parseFy(cf.months, fyRaw);
+  // Default to the current fiscal year on first load; ?fy=all shows everything.
+  if (fy == null && fyRaw !== "all") {
+    const curFy = fiscalYearOf(new Date().toISOString().slice(0, 7));
+    if (fys.includes(curFy)) fy = curFy;
+  }
   return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} collections={collections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
