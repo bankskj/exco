@@ -129,6 +129,7 @@ export type VendorSummary = {
   total: number;
   avgMonthly: number; // average over months actually billed
   currency: string;
+  bills: { date: string; amount: number; reference: string | null }[];
 };
 
 /**
@@ -166,13 +167,16 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
         total: 0,
         avgMonthly: 0,
         currency: String(inv.CurrencyCode ?? "ZAR"),
+        bills: [],
       });
     }
     const v = byVendor.get(key)!;
     const amt = Number(inv.Total ?? 0);
+    const fullDate = parseXeroDate(inv.Date);
     v.months[month] = (v.months[month] ?? 0) + amt;
     v.total += amt;
     v.billCount++;
+    if (fullDate) v.bills.push({ date: fullDate, amount: amt, reference: inv.InvoiceNumber ? String(inv.InvoiceNumber) : inv.Reference ? String(inv.Reference) : null });
   }
   const out = [...byVendor.values()];
   for (const v of out) {

@@ -106,6 +106,53 @@ export async function deleteExpenseByXeroId(db: D1Database, xeroId: string): Pro
   await db.prepare("DELETE FROM recurring_expenses WHERE xero_id = ?").bind(xeroId).run();
 }
 
+// ---- vendor bill history ---------------------------------------------------
+
+export type VendorBill = { vendor_key: string; bill_date: string; amount: number; reference: string | null };
+
+/** Replace the stored bill history (called on each sync). */
+export async function replaceVendorBills(db: D1Database, bills: (VendorBill & { id?: string })[]): Promise<void> {
+  await db.prepare("DELETE FROM vendor_bills").run();
+  const stmt = db.prepare("INSERT INTO vendor_bills (id, vendor_key, bill_date, amount, reference) VALUES (?, ?, ?, ?, ?)");
+  // batch in chunks to stay well under statement limits
+  for (let i = 0; i < bills.length; i += 50) {
+    const chunk = bills.slice(i, i + 50).map((b) => stmt.bind(uuid(), b.vendor_key, b.bill_date, b.amount, b.reference));
+    if (chunk.length) await db.batch(chunk);
+  }
+}
+
+export async function listVendorBills(db: D1Database, vendorKey: string): Promise<VendorBill[]> {
+  const { results } = await db
+    .prepare("SELECT vendor_key, bill_date, amount, reference FROM vendor_bills WHERE vendor_key = ? ORDER BY bill_date DESC")
+    .bind(vendorKey)
+    .all<VendorBill>();
+  return results ?? [];
+}
+
+export type BillingPattern = { label: "mid-month" | "month-end"; day: number };
+
+/**
+ * Typical billing day per vendor from stored history. Median day-of-month;
+ * days 10-20 count as mid-month, anything else as month-end.
+ */
+export async function billingPatterns(db: D1Database): Promise<Map<string, BillingPattern>> {
+  const { results } = await db.prepare("SELECT vendor_key, bill_date FROM vendor_bills").all<{ vendor_key: string; bill_date: string }>();
+  const days = new Map<string, number[]>();
+  for (const r of results ?? []) {
+    const d = Number(r.bill_date.slice(8, 10));
+    if (!Number.isFinite(d)) continue;
+    if (!days.has(r.vendor_key)) days.set(r.vendor_key, []);
+    days.get(r.vendor_key)!.push(d);
+  }
+  const out = new Map<string, BillingPattern>();
+  for (const [key, list] of days) {
+    list.sort((a, b) => a - b);
+    const day = list[Math.floor(list.length / 2)];
+    out.set(key, { label: day >= 10 && day <= 20 ? "mid-month" : "month-end", day });
+  }
+  return out;
+}
+
 /** Upsert Xero repeating bills by xero_id. Returns [inserted, updated]. */
 export async function upsertXeroExpenses(db: D1Database, bills: XeroRepeatingBill[]): Promise<[number, number]> {
   let ins = 0;

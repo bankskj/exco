@@ -23,7 +23,7 @@ import {
 const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 import { ExpensesPage } from "./views/expenses";
-import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId } from "./data/expenses";
+import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, billingPatterns } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
 import { getAllMeta } from "./data/db";
@@ -643,7 +643,15 @@ app.get("/app/expenses", async (c) => {
     : sort === "amount" ? a.amount - b.amount
     : monthlyEquivalent(a) - monthlyEquivalent(b);
   expenses.sort((a, b) => b.active - a.active || (dir === "asc" ? cmp(a, b) : cmp(b, a)));
-  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} msg={msg} />);
+  const patterns = await billingPatterns(c.env.DB);
+  const openId = c.req.query("open") ?? null;
+  let openBills: import("./data/expenses").VendorBill[] = [];
+  if (openId) {
+    const row = expenses.find((e) => e.id === openId);
+    const key = row?.xero_id?.startsWith("vendor:") ? row.xero_id.slice(7) : null;
+    if (key) openBills = await listVendorBills(c.env.DB, key);
+  }
+  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} openId={openId} openBills={openBills} patterns={patterns} msg={msg} />);
 });
 
 app.post("/app/expenses/add", async (c) => {
@@ -819,6 +827,11 @@ async function runXeroSync(env: Bindings): Promise<string> {
     if (track) bills.push(vendorToBill(v, SYNC_MONTHS_BACK));
   }
   const [ins, upd] = await upsertXeroExpenses(env.DB, bills);
+  // Refresh the per-vendor bill history that powers the expense drawers.
+  await replaceVendorBills(
+    env.DB,
+    summary.flatMap((v) => v.bills.map((b) => ({ vendor_key: v.key, bill_date: b.date, amount: b.amount, reference: b.reference }))),
+  );
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
   const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated.`;
   await setMeta(env.DB, "xero_last_sync_result", msg);

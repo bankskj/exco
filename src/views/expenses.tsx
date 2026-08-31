@@ -1,6 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
-import { type RecurringExpense, FREQUENCIES, monthlyEquivalent } from "../data/expenses";
+import { type RecurringExpense, type VendorBill, type BillingPattern, FREQUENCIES, monthlyEquivalent } from "../data/expenses";
 import type { XeroState } from "../lib/xero";
 import { formatZAR } from "../lib/money";
 import { formatDMY } from "../lib/period";
@@ -24,8 +24,11 @@ export const ExpensesPage: FC<{
   page: number;
   sort: SortKey;
   dir: "asc" | "desc";
+  openId: string | null;
+  openBills: VendorBill[];
+  patterns: Map<string, BillingPattern>;
   msg?: string;
-}> = ({ expenses, xero, page, sort, dir, msg }) => {
+}> = ({ expenses, xero, page, sort, dir, openId, openBills, patterns, msg }) => {
   const active = expenses.filter((e) => e.active);
   const monthlyTotal = active.reduce((s, e) => s + monthlyEquivalent(e), 0);
   const fromXero = active.filter((e) => e.source === "xero").length;
@@ -39,6 +42,8 @@ export const ExpensesPage: FC<{
   };
   const arrow = (col: SortKey) => (sort === col ? (dir === "asc" ? " ▲" : " ▼") : "");
   const listQs = `sort=${sort}&dir=${dir}`;
+  const vendorKey = (e: RecurringExpense) => (e.xero_id?.startsWith("vendor:") ? e.xero_id.slice(7) : null);
+  const rowQs = `page=${p}&${listQs}`;
 
   const byCategory = (() => {
     const m = new Map<string, number>();
@@ -95,9 +100,17 @@ export const ExpensesPage: FC<{
               </thead>
               <tbody>
                 {rows.map((e) => (
+                  <>
                   <tr style={e.active ? "" : "opacity:.45"}>
                     <td style="text-align:left">
-                      {e.name}
+                      {vendorKey(e) ? (
+                        <a href={openId === e.id ? `/app/expenses?${rowQs}` : `/app/expenses?${rowQs}&open=${e.id}`}
+                          style="color:inherit;font-weight:600">
+                          {e.name} <span class="muted" style="font-size:10px">{openId === e.id ? "▲" : "▼"}</span>
+                        </a>
+                      ) : (
+                        e.name
+                      )}
                       {e.vendor && e.vendor !== e.name ? <div class="muted" style="font-size:11px">{e.vendor}</div> : null}
                     </td>
                     <td class="muted">{e.category || "—"}</td>
@@ -121,7 +134,7 @@ export const ExpensesPage: FC<{
                       </form>
                     </td>
                     <td class="num"><strong>{formatZAR(monthlyEquivalent(e))}</strong></td>
-                    <td>{e.next_date ? formatDMY(e.next_date) : "—"}</td>
+                    <td>{e.next_date ? formatDMY(e.next_date) : (() => { const k = vendorKey(e); const pat = k ? patterns.get(k) : null; return pat ? <span class="muted" style="font-size:12px">{pat.label}</span> : "—"; })()}</td>
                     <td>{e.source === "xero" ? <span class="badge recurring">xero</span> : <span class="badge actual">manual</span>}</td>
                     <td>
                       <div class="row" style="gap:6px;justify-content:flex-end">
@@ -143,6 +156,14 @@ export const ExpensesPage: FC<{
                       </div>
                     </td>
                   </tr>
+                  {openId === e.id ? (
+                    <tr>
+                      <td colspan={8} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                        <BillDrawer e={e} bills={openBills} pattern={(() => { const k = vendorKey(e); return k ? patterns.get(k) ?? null : null; })()} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </>
                 ))}
                 <tr class="total">
                   <td style="text-align:left">Total — all active ({active.length})</td>
@@ -251,3 +272,40 @@ npx wrangler secret put XERO_CLIENT_SECRET</pre>
     )}
   </div>
 );
+
+const BillDrawer: FC<{ e: RecurringExpense; bills: VendorBill[]; pattern: BillingPattern | null }> = ({ e, bills, pattern }) => {
+  const total = bills.reduce((s, b) => s + b.amount, 0);
+  return (
+    <div>
+      <div class="row spread" style="margin-bottom:10px">
+        <strong>{e.name} — bill history (last 6 months)</strong>
+        <span class="muted" style="font-size:12px">
+          {bills.length} bill(s) · {formatZAR(total)} total
+          {pattern ? <> · typically bills <strong>{pattern.label}</strong> (~day {pattern.day})</> : null}
+        </span>
+      </div>
+      {bills.length === 0 ? (
+        <p class="muted" style="margin:0">No bill history stored yet — run a Xero sync to populate it.</p>
+      ) : (
+        <table style="border-collapse:collapse;font-size:13px;min-width:420px">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:4px 18px 4px 0;color:var(--muted)">Date</th>
+              <th style="text-align:left;padding:4px 18px 4px 0;color:var(--muted)">Reference</th>
+              <th style="text-align:right;padding:4px 0;color:var(--muted)">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bills.map((b) => (
+              <tr>
+                <td style="padding:4px 18px 4px 0">{formatDMY(b.bill_date)}</td>
+                <td style="padding:4px 18px 4px 0" class="muted">{b.reference || "—"}</td>
+                <td style="padding:4px 0;text-align:right;font-variant-numeric:tabular-nums">{formatZAR(b.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
