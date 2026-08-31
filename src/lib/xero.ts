@@ -120,6 +120,65 @@ function scheduleToFrequency(unit: string, period: number): { frequency: string;
   return { frequency: `every ${period} months`, interval_months: period };
 }
 
+/**
+ * Detect recurring expenses from ordinary bills: ACCPAY invoices over the
+ * last `monthsBack` months, grouped by vendor; a vendor billing in at least
+ * `minMonths` distinct months counts as recurring, at its average monthly
+ * spend. (Most orgs enter subscriptions as individual bills, not Xero
+ * repeating invoices — this catches those.)
+ */
+export async function detectRecurringFromBills(
+  accessToken: string,
+  tenantId: string,
+  monthsBack = 6,
+  minMonths = 3,
+): Promise<XeroRepeatingBill[]> {
+  const now = new Date();
+  const sinceY = now.getUTCFullYear();
+  const sinceM = now.getUTCMonth() + 1 - monthsBack; // JS handles negative via Date, but build args manually
+  const y = sinceM >= 1 ? sinceY : sinceY - 1;
+  const m = ((sinceM - 1 + 12) % 12) + 1;
+  const q = new URLSearchParams({
+    where: `Type=="ACCPAY" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
+  });
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = (await res.json()) as any;
+
+  // vendor -> month -> total
+  const byVendor = new Map<string, { name: string; months: Map<string, number>; currency: string }>();
+  for (const inv of data.Invoices ?? []) {
+    if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
+    const cid = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
+    const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
+    if (!month) continue;
+    if (!byVendor.has(cid)) {
+      byVendor.set(cid, { name: String(inv.Contact?.Name ?? "Unknown vendor"), months: new Map(), currency: String(inv.CurrencyCode ?? "ZAR") });
+    }
+    const v = byVendor.get(cid)!;
+    v.months.set(month, (v.months.get(month) ?? 0) + Number(inv.Total ?? 0));
+  }
+
+  const out: XeroRepeatingBill[] = [];
+  for (const [cid, v] of byVendor) {
+    if (v.months.size < minMonths) continue;
+    const avg = [...v.months.values()].reduce((a, b) => a + b, 0) / v.months.size;
+    out.push({
+      xero_id: `vendor:${cid}`,
+      name: v.name,
+      vendor: v.name,
+      amount: Math.round(avg * 100) / 100,
+      frequency: `monthly (detected, ${v.months.size}/${monthsBack} mo)`,
+      interval_months: 1,
+      next_date: null,
+      currency: v.currency,
+    });
+  }
+  return out.sort((a, b) => b.amount - a.amount);
+}
+
 /** Authorised repeating BILLS (Type=ACCPAY) from the connected org. */
 export async function fetchRepeatingBills(accessToken: string, tenantId: string): Promise<XeroRepeatingBill[]> {
   const res = await fetch(REPEATING_URL, {

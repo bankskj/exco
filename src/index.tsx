@@ -24,7 +24,7 @@ const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 import { ExpensesPage } from "./views/expenses";
 import { listExpenses, createExpense, toggleExpense, deleteExpense, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES } from "./data/expenses";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills } from "./lib/xero";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, detectRecurringFromBills } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -92,24 +92,6 @@ app.post("/logout", (c) => {
 
 app.get("/healthz", (c) => c.json({ ok: true }));
 
-// Temporary Xero OAuth diagnostic (no secret values exposed).
-app.get("/xero/diag", (c) => {
-  const id = c.env.XERO_CLIENT_ID ?? "";
-  const secret = c.env.XERO_CLIENT_SECRET ?? "";
-  return c.json({
-    redirect_uri_sent: redirectUri(c),
-    request_url_scheme: new URL(c.req.url).protocol,
-    client_id: {
-      set: id.length > 0,
-      length: id.length,
-      trimmed_length: id.trim().length,
-      has_whitespace: id !== id.trim(),
-      prefix: id.trim().slice(0, 2),
-      suffix: id.trim().slice(-2),
-    },
-    client_secret: { set: secret.length > 0, length: secret.length, has_whitespace: secret !== secret.trim() },
-  });
-});
 
 // --- Protected -----------------------------------------------------------
 
@@ -756,10 +738,18 @@ app.post("/app/expenses/sync", async (c) => {
     if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Not connected to Xero yet.")}`);
     const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
     if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation selected — reconnect.")}`);
-    const bills = await fetchRepeatingBills(token, tenantId);
+    const [repeating, detected] = await Promise.all([
+      fetchRepeatingBills(token, tenantId),
+      detectRecurringFromBills(token, tenantId, 6, 3),
+    ]);
+    const bills = [...repeating, ...detected];
     const [ins, upd] = await upsertXeroExpenses(c.env.DB, bills);
     await setMeta(c.env.DB, "xero_last_sync", new Date().toISOString());
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync done: ${bills.length} repeating bill(s) — ${ins} new, ${upd} updated.`)}`);
+    return c.redirect(
+      `/app/expenses?msg=${encodeURIComponent(
+        `Xero sync done: ${repeating.length} repeating bill(s) + ${detected.length} recurring vendor(s) detected from bills — ${ins} new, ${upd} updated.`,
+      )}`,
+    );
   } catch (e) {
     return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }

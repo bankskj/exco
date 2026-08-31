@@ -35,7 +35,7 @@ export const ExpensesPage: FC<{
         <div class="row spread">
           <div>
             <h1 style="margin-top:12px">Recurring expenses</h1>
-            <p class="muted" style="margin-top:0">Standing costs — captured here or synced from Xero repeating bills.</p>
+            <p class="muted" style="margin-top:0">Standing costs — captured here or detected from your Xero bills.</p>
           </div>
           <a class="btn btn-sm" href="/app/expenses/export.csv">⬇ Export CSV</a>
         </div>
@@ -133,7 +133,7 @@ const XeroCard: FC<{ xero: XeroState }> = ({ xero }) => (
         <div class="row" style="gap:10px">
           <span class="badge income">connected · {xero.orgName ?? "org"}</span>
           <form method="post" action="/app/expenses/sync" style="margin:0">
-            <button class="btn btn-sm btn-primary" type="submit">Sync repeating bills</button>
+            <button class="btn btn-sm btn-primary" type="submit">Sync from Xero</button>
           </form>
           <form method="post" action="/app/xero/disconnect" style="margin:0"
             onsubmit="return confirm('Disconnect Xero? Synced rows stay; they just stop updating.')">
@@ -170,8 +170,9 @@ npx wrangler secret put XERO_CLIENT_SECRET</pre>
       </div>
     ) : (
       <p class="muted" style="margin:12px 0 0">
-        Sync upserts by Xero ID: amounts, schedules and next dates refresh; rows you've paused stay paused. Manual
-        expenses are never touched.
+        Sync pulls Xero repeating bills AND detects recurring vendors from ordinary bills (billed in 3+ of the last 6
+        months, at average monthly spend). Upserts by Xero ID — re-syncing refreshes amounts, paused rows stay paused,
+        manual expenses are never touched. Pause anything that isn't truly recurring.
       </p>
     )}
   </div>
