@@ -109,6 +109,12 @@ td.fc { color: #f6c453; } /* forecast cell tint */
 .badge.type-za { color: var(--accent-2); border-color: rgba(110,231,183,.35); }
 .badge.type-international { color: #f6c453; border-color: rgba(246,196,83,.35); }
 .badge.type-freelancer { color: #c792ea; border-color: rgba(199,146,234,.35); }
+.badge.kind-note { color: var(--muted); }
+.badge.kind-achievement { color: var(--accent-2); border-color: rgba(110,231,183,.35); }
+.badge.kind-verbal_warning { color: #f6c453; border-color: rgba(246,196,83,.35); }
+.badge.kind-written_warning { color: var(--danger); border-color: rgba(255,107,107,.35); }
+.badge.kind-change { color: var(--accent); border-color: rgba(79,140,255,.35); }
+.badge.kind-contract { color: #c792ea; border-color: rgba(199,146,234,.35); }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
 .formgrid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; }
@@ -135,6 +141,7 @@ const NAV = [
   { href: "/app", label: "Dashboard", key: "dashboard" },
   { href: "/app/payroll", label: "Payroll", key: "payroll" },
   { href: "/app/accounts", label: "Accounts", key: "accounts" },
+  { href: "/app/hr", label: "HR", key: "hr" },
 ];
 
 export const Layout: FC<

@@ -2,7 +2,25 @@ import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import type { AppEnv } from "./types";
 import { checkPassword, startSession, endSession, isAuthed, requireAuth } from "./auth";
-import { Landing, Login, Dashboard, SectionStub } from "./views/pages";
+import { Landing, Login, Dashboard } from "./views/pages";
+import { HrDashboard, HrEmployeePage, tenure } from "./views/hr";
+import {
+  listHrEmployees,
+  getHrEmployee,
+  createHrEmployee,
+  updateHrEmployee,
+  listNotes,
+  createNote,
+  deleteNote,
+  warningCounts,
+  documentsForNotes,
+  registerDocument,
+  getDocument,
+  deleteDocumentsForNote,
+  NOTE_KINDS,
+} from "./data/hr";
+
+const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
 import { CashflowDashboard } from "./views/cashflow";
 import { CashflowEditor, type EntryMap } from "./views/cashflow_edit";
@@ -455,9 +473,139 @@ app.get("/app/accounts/export.csv", async (c) => {
   return csvResponse(c, "cashflow.csv", lines.join("\n"));
 });
 
-// ---------- HR (stub for now) ----------
+// ---------- HR ----------
 
-app.get("/app/hr", (c) => c.html(<SectionStub icon="👥" title="HR" />));
+app.get("/app/hr", async (c) => {
+  const [employees, warnings] = await Promise.all([listHrEmployees(c.env.DB), warningCounts(c.env.DB)]);
+  const showRaw = c.req.query("show");
+  const show = showRaw === "left" || showRaw === "all" ? showRaw : "active";
+  return c.html(<HrDashboard employees={employees} warnings={warnings} now={new Date()} show={show} />);
+});
+
+app.post("/app/hr/employee", async (c) => {
+  const b = await c.req.parseBody();
+  const name = String(b.name ?? "").trim();
+  if (name) {
+    const id = await createHrEmployee(c.env.DB, {
+      name,
+      email: String(b.email ?? "").trim() || null,
+      position: String(b.position ?? "").trim() || null,
+      team: String(b.team ?? "").trim() || null,
+      manager: String(b.manager ?? "").trim() || null,
+      start_date: isDate(String(b.start_date)) ? String(b.start_date) : null,
+    });
+    return c.redirect(`/app/hr/${id}`);
+  }
+  return c.redirect("/app/hr");
+});
+
+app.get("/app/hr/export.csv", async (c) => {
+  const employees = await listHrEmployees(c.env.DB);
+  const now = new Date();
+  const lines = ["Name,Email,Position,Team,Manager,Start date,Last working day,Tenure,Status"];
+  for (const e of employees) {
+    lines.push(
+      [
+        csv(e.name), csv(e.email ?? ""), csv(e.position ?? ""), csv(e.team ?? ""), csv(e.manager ?? ""),
+        e.start_date ?? "", e.end_date ?? "", tenure(e, now).label, e.end_date ? "left" : "active",
+      ].join(","),
+    );
+  }
+  return csvResponse(c, "headcount.csv", lines.join("\n"));
+});
+
+// Serve an HR attachment from R2 (session-protected like everything under /app).
+app.get("/app/hr/file/:docId", async (c) => {
+  const doc = await getDocument(c.env.DB, c.req.param("docId"));
+  if (!doc) return c.notFound();
+  const obj = await c.env.UPLOADS.get(doc.r2_key);
+  if (!obj) return c.notFound();
+  const isImage = doc.content_type?.startsWith("image/") ?? false;
+  const isPdf = doc.content_type === "application/pdf";
+  return new Response(obj.body, {
+    headers: {
+      "content-type": doc.content_type ?? "application/octet-stream",
+      "content-disposition": `${isImage || isPdf ? "inline" : "attachment"}; filename="${doc.filename.replace(/"/g, "")}"`,
+      "cache-control": "private, max-age=3600",
+    },
+  });
+});
+
+app.get("/app/hr/:id", async (c) => {
+  const emp = await getHrEmployee(c.env.DB, c.req.param("id"));
+  if (!emp) return c.redirect("/app/hr");
+  const notes = await listNotes(c.env.DB, emp.id);
+  const docs = await documentsForNotes(c.env.DB, notes.map((n) => n.id));
+  return c.html(<HrEmployeePage emp={emp} notes={notes} docs={docs} now={new Date()} saved={c.req.query("saved") === "1"} />);
+});
+
+app.post("/app/hr/:id/update", async (c) => {
+  const id = c.req.param("id");
+  const emp = await getHrEmployee(c.env.DB, id);
+  if (!emp) return c.redirect("/app/hr");
+  const b = await c.req.parseBody();
+  const name = String(b.name ?? "").trim() || emp.name;
+  await updateHrEmployee(c.env.DB, id, {
+    name,
+    email: String(b.email ?? "").trim() || null,
+    position: String(b.position ?? "").trim() || null,
+    team: String(b.team ?? "").trim() || null,
+    manager: String(b.manager ?? "").trim() || null,
+    employee_no: emp.employee_no,
+    start_date: isDate(String(b.start_date)) ? String(b.start_date) : null,
+    end_date: isDate(String(b.end_date)) ? String(b.end_date) : null,
+  });
+  return c.redirect(`/app/hr/${id}?saved=1`);
+});
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per file
+
+app.post("/app/hr/:id/note", async (c) => {
+  const id = c.req.param("id");
+  const emp = await getHrEmployee(c.env.DB, id);
+  if (!emp) return c.redirect("/app/hr");
+  const body = await c.req.parseBody({ all: true });
+  const title = String(body.title ?? "").trim();
+  if (!title) return c.redirect(`/app/hr/${id}`);
+  const kind = NOTE_KINDS.includes(String(body.kind) as any) ? String(body.kind) : "note";
+  const noteId = await createNote(c.env.DB, {
+    employee_id: id,
+    kind,
+    title,
+    body: String(body.body ?? "").trim() || null,
+    note_date: isDate(String(body.note_date)) ? String(body.note_date) : null,
+  });
+  // Attachments → R2 + documents registry.
+  const raw = body.files;
+  const files = (Array.isArray(raw) ? raw : [raw]).filter((f): f is File => f instanceof File && f.size > 0);
+  for (const f of files) {
+    if (f.size > MAX_UPLOAD_BYTES) continue;
+    const safe = f.name.replace(/[^\w.\- ]+/g, "_").slice(0, 120);
+    const key = `hr/${id}/${noteId}/${crypto.randomUUID()}-${safe}`;
+    await c.env.UPLOADS.put(key, f.stream(), {
+      httpMetadata: { contentType: f.type || "application/octet-stream" },
+    });
+    await registerDocument(c.env.DB, {
+      r2_key: key,
+      filename: f.name,
+      content_type: f.type || null,
+      size_bytes: f.size,
+      ref_id: noteId,
+    });
+  }
+  return c.redirect(`/app/hr/${id}?saved=1`);
+});
+
+app.post("/app/hr/note/delete", async (c) => {
+  const b = await c.req.parseBody();
+  const noteId = String(b.id ?? "");
+  const empId = String(b.emp ?? "");
+  if (noteId) {
+    await deleteDocumentsForNote(c.env.DB, c.env.UPLOADS, noteId);
+    await deleteNote(c.env.DB, noteId);
+  }
+  return c.redirect(empId ? `/app/hr/${empId}` : "/app/hr");
+});
 
 // --- helpers -------------------------------------------------------------
 
