@@ -874,7 +874,10 @@ app.get("/app/expenses/monthly", async (c) => {
   const excludedKeys = new Set<string>();
   const byMonth = new Map<string, { total: number; billCount: number; vendors: Set<string> }>();
   const kept: typeof bills = [];
+  const nowMonth = new Date().toISOString().slice(0, 7);
   for (const b of bills) {
+    const bm = b.bill_date.slice(0, 7);
+    if (bm > nowMonth || bm < "2020-01") continue; // mis-captured dates in Xero
     const name = b.vendor_name || rules.get(b.vendor_key)?.name || "";
     if (isStaffVendor(b.vendor_key, name)) {
       excludedKeys.add(b.vendor_key);

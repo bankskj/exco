@@ -151,12 +151,18 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as any;
 
+  // Ignore mis-captured dates (e.g. a bill typed as year 3107) — anything
+  // outside the fetch window up to the end of the current month.
+  const sinceMonth = `${y}-${String(m).padStart(2, "0")}`;
+  const currentMonth = now.toISOString().slice(0, 7);
+
   const byVendor = new Map<string, VendorSummary>();
   for (const inv of data.Invoices ?? []) {
     if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
     const key = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
     const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
     if (!month) continue;
+    if (month < sinceMonth || month > currentMonth) continue;
     if (!byVendor.has(key)) {
       byVendor.set(key, {
         key,
