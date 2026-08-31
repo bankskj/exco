@@ -21,6 +21,12 @@ import {
 } from "./data/hr";
 
 const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+import { ExpensesPage } from "./views/expenses";
+import { listExpenses, createExpense, toggleExpense, deleteExpense, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES } from "./data/expenses";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills } from "./lib/xero";
+import { getAllMeta } from "./data/db";
+import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
 import { CashflowDashboard } from "./views/cashflow";
 import { CashflowEditor, type EntryMap } from "./views/cashflow_edit";
@@ -605,6 +611,134 @@ app.post("/app/hr/note/delete", async (c) => {
     await deleteNote(c.env.DB, noteId);
   }
   return c.redirect(empId ? `/app/hr/${empId}` : "/app/hr");
+});
+
+// ---------- Recurring expenses + Xero ----------
+
+async function xeroState(c: any): Promise<import("./lib/xero").XeroState> {
+  const configured = Boolean(c.env.XERO_CLIENT_ID && c.env.XERO_CLIENT_SECRET);
+  const m = await getAllMeta(c.env.DB);
+  return {
+    configured,
+    connected: configured && Boolean(m.xero_refresh_token),
+    orgName: m.xero_org_name ?? null,
+    lastSync: m.xero_last_sync ?? null,
+  };
+}
+
+app.get("/app/expenses", async (c) => {
+  const [expenses, xero] = await Promise.all([listExpenses(c.env.DB), xeroState(c)]);
+  const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+  return c.html(<ExpensesPage expenses={expenses} xero={xero} msg={msg} />);
+});
+
+app.post("/app/expenses/add", async (c) => {
+  const b = await c.req.parseBody();
+  const name = String(b.name ?? "").trim();
+  const freq = FREQUENCIES.find((f) => f.key === String(b.frequency)) ?? FREQUENCIES[1];
+  if (name) {
+    await createExpense(c.env.DB, {
+      name,
+      vendor: String(b.vendor ?? "").trim() || null,
+      category: String(b.category ?? "").trim() || null,
+      amount: parseMoney(String(b.amount ?? "0")),
+      frequency: freq.key,
+      interval_months: freq.months,
+      next_date: isDate(String(b.next_date)) ? String(b.next_date) : null,
+      notes: String(b.notes ?? "").trim() || null,
+    });
+  }
+  return c.redirect("/app/expenses");
+});
+
+app.post("/app/expenses/toggle", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await toggleExpense(c.env.DB, String(b.id));
+  return c.redirect("/app/expenses");
+});
+
+app.post("/app/expenses/delete", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await deleteExpense(c.env.DB, String(b.id));
+  return c.redirect("/app/expenses");
+});
+
+app.get("/app/expenses/export.csv", async (c) => {
+  const expenses = await listExpenses(c.env.DB);
+  const lines = ["Name,Vendor,Category,Amount,Currency,Frequency,Monthly equivalent,Next date,Active,Source"];
+  for (const e of expenses) {
+    lines.push(
+      [
+        csv(e.name), csv(e.vendor ?? ""), csv(e.category ?? ""), e.amount.toFixed(2), e.currency, e.frequency,
+        monthlyEquivalent(e).toFixed(2), e.next_date ? formatDMY(e.next_date) : "", e.active ? "yes" : "no", e.source,
+      ].join(","),
+    );
+  }
+  return csvResponse(c, "recurring-expenses.csv", lines.join("\n"));
+});
+
+// ----- Xero OAuth flow -----
+
+function redirectUri(c: any): string {
+  return new URL(c.req.url).origin + "/app/xero/callback";
+}
+
+app.get("/app/xero/connect", async (c) => {
+  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
+  const state = crypto.randomUUID();
+  await setSignedCookie(c, "xero_state", state, c.env.SESSION_SECRET, {
+    path: "/",
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    maxAge: 600,
+  });
+  return c.redirect(authUrl(c.env.XERO_CLIENT_ID, redirectUri(c), state));
+});
+
+app.get("/app/xero/callback", async (c) => {
+  const err = c.req.query("error");
+  if (err) return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero: ${err}`)}`);
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const expected = await getSignedCookie(c, c.env.SESSION_SECRET, "xero_state");
+  if (!code || !state || !expected || state !== expected) {
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero connection failed (state mismatch) — try again.")}`);
+  }
+  try {
+    const tokens = await exchangeCode(c.env.XERO_CLIENT_ID!, c.env.XERO_CLIENT_SECRET!, code, redirectUri(c));
+    await persistTokens(c.env.DB, tokens);
+    const conns = await fetchConnections(tokens.access_token);
+    if (conns.length === 0) throw new Error("no organisations authorised");
+    await setMeta(c.env.DB, "xero_tenant_id", conns[0].tenantId);
+    await setMeta(c.env.DB, "xero_org_name", conns[0].tenantName);
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Connected to ${conns[0].tenantName}. Click Sync to pull repeating bills.`)}`);
+  } catch (e) {
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero connection failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
+  }
+});
+
+app.post("/app/xero/disconnect", async (c) => {
+  for (const k of ["xero_refresh_token", "xero_access_token", "xero_access_expires", "xero_tenant_id", "xero_org_name"]) {
+    await c.env.DB.prepare("DELETE FROM app_meta WHERE key = ?").bind(k).run();
+  }
+  return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero disconnected.")}`);
+});
+
+app.post("/app/expenses/sync", async (c) => {
+  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
+  try {
+    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID, c.env.XERO_CLIENT_SECRET);
+    if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Not connected to Xero yet.")}`);
+    const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
+    if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation selected — reconnect.")}`);
+    const bills = await fetchRepeatingBills(token, tenantId);
+    const [ins, upd] = await upsertXeroExpenses(c.env.DB, bills);
+    await setMeta(c.env.DB, "xero_last_sync", new Date().toISOString());
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync done: ${bills.length} repeating bill(s) — ${ins} new, ${upd} updated.`)}`);
+  } catch (e) {
+    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
+  }
 });
 
 // --- helpers -------------------------------------------------------------

@@ -149,6 +149,7 @@ const NAV = [
   { href: "/app", label: "Dashboard", key: "dashboard" },
   { href: "/app/payroll", label: "Payroll", key: "payroll" },
   { href: "/app/accounts", label: "Accounts", key: "accounts" },
+  { href: "/app/expenses", label: "Expenses", key: "expenses" },
   { href: "/app/hr", label: "HR", key: "hr" },
 ];
 

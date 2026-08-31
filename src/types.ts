@@ -5,6 +5,8 @@ export type Bindings = {
   // Secrets (set with `wrangler secret put`)
   SITE_PASSWORD: string;
   SESSION_SECRET: string;
+  XERO_CLIENT_ID?: string;
+  XERO_CLIENT_SECRET?: string;
 };
 
 export type Variables = {
