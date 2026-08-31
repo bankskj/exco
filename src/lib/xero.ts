@@ -12,7 +12,7 @@ const REPEATING_URL = "https://api.xero.com/api.xro/2.0/RepeatingInvoices";
 // Repeating bills are invoice-family objects → accounting.invoices.read;
 // contacts.read for embedded vendor names; settings.read for org info;
 // offline_access for refresh tokens.
-export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.contacts.read accounting.settings.read";
+export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.reports.profitandloss.read accounting.contacts.read accounting.settings.read";
 
 export type XeroTokens = {
   access_token: string;
@@ -301,4 +301,112 @@ export async function fetchRepeatingBills(accessToken: string, tenantId: string)
     });
   }
   return out;
+}
+
+// ---- Profit & Loss report --------------------------------------------------
+
+export type PnLRow = { name: string; values: number[] };
+export type PnL = {
+  months: string[]; // 'YYYY-MM' ascending, aligned with every values[] array
+  incomeRows: PnLRow[];
+  cosRows: PnLRow[]; // cost of sales
+  opexRows: PnLRow[]; // operating expenses
+  incomeTotal: number[];
+  cosTotal: number[];
+  opexTotal: number[];
+};
+
+const MONTH_IDX: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+function monthFromHeader(v: string): string | null {
+  const m = String(v).match(/([A-Za-z]{3})[a-z]*[\s-]+'?(\d{2,4})/);
+  if (!m) return null;
+  const mi = MONTH_IDX[m[1].toLowerCase()];
+  if (!mi) return null;
+  const y = m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]);
+  return `${y}-${String(mi).padStart(2, "0")}`;
+}
+
+const pnlNum = (v: unknown): number => {
+  const n = parseFloat(String(v ?? "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Xero Profit & Loss, monthly columns ending at toDate. Matches the Xero
+ * dashboard by construction. monthsCount columns requested (Xero caps
+ * comparison periods at 11 → max 12 columns).
+ */
+export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number): Promise<PnL> {
+  const q = new URLSearchParams({
+    toDate,
+    timeframe: "MONTH",
+    periods: String(Math.min(11, Math.max(1, monthsCount - 1))),
+    standardLayout: "true",
+  });
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Xero P&L ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as any;
+  const report = data.Reports?.[0];
+  const rows = report?.Rows ?? [];
+
+  // Header → month per column (order as returned; we sort ascending at the end).
+  const header = rows.find((r: any) => r.RowType === "Header");
+  const colMonths: (string | null)[] = (header?.Cells ?? []).slice(1).map((c: any) => monthFromHeader(String(c.Value ?? "")));
+
+  const incomeRows: PnLRow[] = [];
+  const cosRows: PnLRow[] = [];
+  const opexRows: PnLRow[] = [];
+  let incomeTotal: number[] | null = null;
+  let cosTotal: number[] | null = null;
+  let opexTotal: number[] | null = null;
+
+  for (const sec of rows) {
+    if (sec.RowType !== "Section") continue;
+    const title = String(sec.Title ?? "");
+    let bucket: PnLRow[] | null = null;
+    if (/cost of sales/i.test(title)) bucket = cosRows;
+    else if (/operating expense|less expense|expenses/i.test(title)) bucket = opexRows;
+    else if (/income|revenue|sales|turnover/i.test(title)) bucket = incomeRows;
+    for (const r of sec.Rows ?? []) {
+      const cells = r.Cells ?? [];
+      const name = String(cells[0]?.Value ?? "");
+      const values = cells.slice(1).map((c: any) => pnlNum(c.Value));
+      if (r.RowType === "Row" && bucket) bucket.push({ name, values });
+      if (r.RowType === "SummaryRow") {
+        if (/^total (income|revenue|sales|trading income)/i.test(name)) incomeTotal = values;
+        else if (/^total cost of sales/i.test(name)) cosTotal = values;
+        else if (/^total (operating expenses|expenses)/i.test(name)) opexTotal = values;
+      }
+    }
+  }
+  const sumRows = (rs: PnLRow[]): number[] => {
+    const n = colMonths.length;
+    const out = new Array(n).fill(0);
+    for (const r of rs) r.values.forEach((v, i) => (out[i] += v));
+    return out;
+  };
+  let months: string[] = [];
+  const order: number[] = [];
+  colMonths.forEach((m, i) => {
+    if (m) {
+      months.push(m);
+      order.push(i);
+    }
+  });
+  // sort ascending by month, remapping all value arrays
+  const perm = months.map((m, i) => ({ m, i })).sort((a, b) => (a.m < b.m ? -1 : 1));
+  const remap = (vals: number[]): number[] => perm.map((p) => vals[order[p.i]] ?? 0);
+  const finish = (rs: PnLRow[]): PnLRow[] => rs.map((r) => ({ name: r.name, values: remap(r.values) })).filter((r) => r.values.some((v) => v !== 0));
+  return {
+    months: perm.map((p) => p.m),
+    incomeRows: finish(incomeRows),
+    cosRows: finish(cosRows),
+    opexRows: finish(opexRows),
+    incomeTotal: remap(incomeTotal ?? sumRows(incomeRows)),
+    cosTotal: remap(cosTotal ?? sumRows(cosRows)),
+    opexTotal: remap(opexTotal ?? sumRows(opexRows)),
+  };
 }

@@ -26,7 +26,8 @@ import { ExpensesPage } from "./views/expenses";
 import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, listAllVendorBills, billingPatterns } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill } from "./lib/xero";
+import { IncomePage, type ExpenseBucket } from "./views/income";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -860,6 +861,79 @@ app.post("/app/expenses/sync", async (c) => {
   } catch (e) {
     return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
+});
+
+// ----- Income dashboard (Xero P&L) -----
+
+const STAFF_RE = /salar|wage|payroll|staff|bonus|\buif\b|\bpaye\b|\bsdl\b|medical aid|pension|leave pay/i;
+const DEV_RE = /developer|contractor|freelanc|consult/i;
+
+function lastDayISO(period: string): string {
+  const [y, m] = period.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${period}-${String(last).padStart(2, "0")}`;
+}
+
+app.get("/app/accounts/income", async (c) => {
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const curFy = fiscalYearOf(nowMonth);
+  const fys = [curFy - 1, curFy];
+  const fyRaw = Number(c.req.query("fy"));
+  const fy = fys.includes(fyRaw) ? fyRaw : curFy;
+  // FY-to-date window: Mar of (fy-1) → current month, capped at Feb of fy.
+  const startMonth = `${fy - 1}-03`;
+  const capMonth = `${fy}-02`;
+  const endMonth = nowMonth < startMonth ? startMonth : nowMonth > capMonth ? capMonth : nowMonth;
+  const monthsCount = (Number(endMonth.slice(0, 4)) - Number(startMonth.slice(0, 4))) * 12 + (Number(endMonth.slice(5, 7)) - Number(startMonth.slice(5, 7))) + 1;
+
+  const empty: PnL = { months: [], incomeRows: [], cosRows: [], opexRows: [], incomeTotal: [], cosTotal: [], opexTotal: [] };
+  let pnl: PnL = empty;
+  let prior: PnL | null = null;
+  let error: string | undefined;
+  try {
+    if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) throw new Error("Xero credentials not set");
+    const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID.trim(), c.env.XERO_CLIENT_SECRET.trim());
+    if (!token) throw new Error("Connect Xero on the Expenses tab first");
+    const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
+    if (!tenantId) throw new Error("No Xero organisation — reconnect");
+    const priorEnd = `${Number(endMonth.slice(0, 4)) - 1}${endMonth.slice(4)}`;
+    [pnl, prior] = await Promise.all([
+      fetchProfitAndLoss(token, tenantId, lastDayISO(endMonth), monthsCount),
+      fetchProfitAndLoss(token, tenantId, lastDayISO(priorEnd), monthsCount).catch(() => null),
+    ]);
+    // Keep only months inside the FY window (defensive against extra columns).
+    const keep = pnl.months.map((m) => m >= startMonth && m <= endMonth);
+    const filt = (vals: number[]) => vals.filter((_, i) => keep[i]);
+    pnl = {
+      months: pnl.months.filter((_, i) => keep[i]),
+      incomeRows: pnl.incomeRows.map((r) => ({ name: r.name, values: filt(r.values) })),
+      cosRows: pnl.cosRows.map((r) => ({ name: r.name, values: filt(r.values) })),
+      opexRows: pnl.opexRows.map((r) => ({ name: r.name, values: filt(r.values) })),
+      incomeTotal: filt(pnl.incomeTotal),
+      cosTotal: filt(pnl.cosTotal),
+      opexTotal: filt(pnl.opexTotal),
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "unknown error";
+    error = /403/.test(msg)
+      ? "Xero P&L access not granted yet — Disconnect and reconnect Xero on the Expenses tab to approve the report scope, then reload."
+      : `Couldn't load the P&L from Xero: ${msg}`;
+  }
+
+  // Bucket expense accounts: staff / dev & freelancers / everything else.
+  const zeros = pnl.months.map(() => 0);
+  const buckets: ExpenseBucket[] = [
+    { key: "staff", title: "Staff", rows: [], total: [...zeros] },
+    { key: "dev", title: "Dev / freelancers", rows: [], total: [...zeros] },
+    { key: "other", title: "Everything else", rows: [], total: [...zeros] },
+  ];
+  const allExpenseRows: PnLRow[] = [...pnl.cosRows, ...pnl.opexRows];
+  for (const r of allExpenseRows) {
+    const b = STAFF_RE.test(r.name) ? buckets[0] : DEV_RE.test(r.name) ? buckets[1] : buckets[2];
+    b.rows.push(r);
+    r.values.forEach((v, i) => (b.total[i] += v));
+  }
+  return c.html(<IncomePage fy={fy} fys={fys} pnl={pnl} prior={prior} buckets={buckets} error={error} />);
 });
 
 // ----- Monthly expense log -----

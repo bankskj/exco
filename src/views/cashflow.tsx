@@ -4,6 +4,7 @@ import type { CFCategory, CFSettings, Forecast } from "../lib/forecast";
 import { formatZAR } from "../lib/money";
 import { label, shortLabel, fiscalYearOf, fyLabel, fyRangeLabel } from "../lib/period";
 import { lineChart, comboBars, hBars } from "../lib/charts";
+import { AccountsTabs } from "./income";
 
 /** Fiscal-year (Mar–Feb) selector. fy=null means the full timeline. */
 export const FySelector: FC<{ base: string; fys: number[]; fy: number | null }> = ({ base, fys, fy }) => (
@@ -104,7 +105,9 @@ export const CashflowDashboard: FC<{
 
         {saved ? <div class="callout" style="margin-bottom:16px">✓ Saved.</div> : null}
 
-        <FySelector base="/app/accounts" fys={fys} fy={fy} />
+        <AccountsTabs active="cashflow" />
+
+        <div class="section-block"><FySelector base="/app/accounts" fys={fys} fy={fy} /></div>
 
         <div class="kpis section-block">
           <Kpi label="Cash on hand" value={formatZAR(forecast.kpis.currentCash)} sub={`As at ${latest ? label(latest) : "—"}`}
