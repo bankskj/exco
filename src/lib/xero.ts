@@ -339,6 +339,11 @@ const pnlNum = (v: unknown): number => {
  */
 export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number, paymentsOnly = false): Promise<PnL> {
   const q = new URLSearchParams({
+    // Explicit fromDate is required: when omitted, Xero defaults it to the
+    // org's CURRENT financial-year start, which breaks any historical toDate
+    // ("fromDate must be before toDate"). Base period = the toDate month;
+    // `periods` extends backwards from there.
+    fromDate: `${toDate.slice(0, 7)}-01`,
     toDate,
     timeframe: "MONTH",
     periods: String(Math.min(11, Math.max(1, monthsCount - 1))),
