@@ -8,6 +8,9 @@
     "enabled": true
   },
   "account_id": "2f3a54283c593ca9fb546474ca1e5c68",
+  "routes": [
+    { "pattern": "exco.elula.online", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
