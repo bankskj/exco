@@ -210,13 +210,30 @@ const CollectionsCard: FC<{ collections: { month: string; invoiced: number; rece
     <div class="card section-block">
       <div class="row spread">
         <h3 style="margin:0">Collections gap — invoiced vs received</h3>
-        <span class="muted" style="font-size:12px">invoiced vs banked per month; 'still unpaid' is live from the invoices</span>
+        <span class="muted" style="font-size:12px">gap = billing vs banking timing inside each month; 'still unpaid' is the live open balance per billing month</span>
       </div>
       <div class="kpis" style="margin:14px 0">
-        <div class="kpi"><div class="k-label">Outstanding (window)</div><div class={`k-value ${totGap > 0 ? "warn" : "pos"}`}>{formatZAR(totGap)}</div><div class="k-sub muted">billed but not yet collected</div></div>
-        <div class="kpi"><div class="k-label">Collection rate</div><div class={`k-value ${ratePct < 85 ? "neg" : ratePct < 95 ? "warn" : "pos"}`}>{ratePct}%</div><div class="k-sub muted">{formatZAR(totReceived)} of {formatZAR(totInvoiced)}</div></div>
-        <div class="kpi"><div class="k-label">Still unpaid today</div><div class={`k-value ${totDue > 0 ? "warn" : "pos"}`}>{formatZAR(totDue)}</div><div class="k-sub muted">open balances on these months' invoices</div></div>
-        <div class="kpi"><div class="k-label">Latest month gap</div><div class={`k-value ${latest.gap > 0 ? "warn" : "pos"}`}>{formatZAR(latest.gap)}</div><div class="k-sub muted">{label(latest.month)}</div></div>
+        <div class="kpi">
+          <div class="k-label">Still unpaid today — real debtors</div>
+          <div class={`k-value ${totDue > totInvoiced * 0.05 ? "warn" : "pos"}`}>{formatZAR(totDue)}</div>
+          <div class="k-sub muted">open balances on these months' invoices</div>
+        </div>
+        <div class="kpi">
+          <div class="k-label">Collected to date</div>
+          {(() => { const r = totInvoiced ? Math.max(0, Math.min(100, Math.round(((totInvoiced - totDue) / totInvoiced) * 100))) : 100;
+            return <div class={`k-value ${r < 85 ? "neg" : r < 95 ? "warn" : "pos"}`}>{r}%</div>; })()}
+          <div class="k-sub muted">of {formatZAR(totInvoiced)} billed in the window</div>
+        </div>
+        <div class="kpi">
+          <div class="k-label">Timing gap (window)</div>
+          <div class="k-value warn">{formatZAR(totGap)}</div>
+          <div class="k-sub muted">cash landed after month-end — not bad debt</div>
+        </div>
+        <div class="kpi">
+          <div class="k-label">Latest month gap</div>
+          <div class={`k-value ${latest.gap > 0 ? "warn" : "pos"}`}>{formatZAR(latest.gap)}</div>
+          <div class="k-sub muted">{label(latest.month)}</div>
+        </div>
       </div>
       <div dangerouslySetInnerHTML={{ __html: lineChart(gapLine, { height: 180, color: "#f6c453" }) }} />
       <div class="tablewrap" style="margin-top:12px">
