@@ -44,6 +44,22 @@ export const ExpensesPage: FC<{
   const listQs = `sort=${sort}&dir=${dir}`;
   const vendorKey = (e: RecurringExpense) => (e.xero_id?.startsWith("vendor:") ? e.xero_id.slice(7) : null);
   const rowQs = `page=${p}&${listQs}`;
+  // Billing-timing split: vendor pattern for synced rows; next-date day for manual ones.
+  const timingOf = (e: RecurringExpense): "mid-month" | "month-end" | null => {
+    const k = vendorKey(e);
+    const pat = k ? patterns.get(k) : null;
+    if (pat) return pat.label;
+    if (e.next_date) {
+      const d = Number(e.next_date.slice(8, 10));
+      return d >= 10 && d <= 20 ? "mid-month" : "month-end";
+    }
+    return null;
+  };
+  const midRows = active.filter((e) => timingOf(e) === "mid-month");
+  const endRows = active.filter((e) => timingOf(e) === "month-end");
+  const midTotal = midRows.reduce((s, e) => s + monthlyEquivalent(e), 0);
+  const endTotal = endRows.reduce((s, e) => s + monthlyEquivalent(e), 0);
+  const unknownTotal = monthlyTotal - midTotal - endTotal;
 
   const byCategory = (() => {
     const m = new Map<string, number>();
@@ -69,6 +85,10 @@ export const ExpensesPage: FC<{
           <Kpi label="Annualised" value={formatZAR(monthlyTotal * 12)} />
           <Kpi label="From Xero" value={String(fromXero)} sub={xero.orgName ?? "not connected"} />
           <Kpi label="Last Xero sync" value={xero.lastSync ? formatDMY(xero.lastSync.slice(0, 10)) : "—"} />
+          <Kpi label="Mid-month (days 10–20)" value={formatZAR(midTotal)}
+            sub={`${midRows.length} expense(s) · ${monthlyTotal ? Math.round((midTotal / monthlyTotal) * 100) : 0}% of monthly`} />
+          <Kpi label="Month-end" value={formatZAR(endTotal)}
+            sub={`${endRows.length} expense(s)${unknownTotal > 0.005 ? ` · ${formatZAR(unknownTotal)} unclassified` : ""}`} />
         </div>
 
         <XeroCard xero={xero} />
