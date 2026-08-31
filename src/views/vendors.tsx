@@ -48,29 +48,24 @@ export const VendorReviewPage: FC<{
             <thead>
               <tr>
                 <th>Vendor</th>
-                {monthCols.map((m) => <th>{m.slice(2).replace("-", "/")}</th>)}
-                <th>Months</th>
-                <th>Avg / mo</th>
                 <th>Status</th>
-                <th></th>
+                <th style="text-align:left">Actions</th>
+                <th>Avg / mo</th>
+                <th>Months</th>
+                {monthCols.map((m) => <th>{m.slice(2).replace("-", "/")}</th>)}
               </tr>
             </thead>
             <tbody>
               {vendors.map((v) => (
                 <tr style={v.effective === "exclude" || v.effective === "ignored" ? "opacity:.5" : ""}>
                   <td>{v.name}</td>
-                  {monthCols.map((m) => (
-                    <td class="num muted">{v.months[m] ? formatZARCompact(v.months[m]) : "·"}</td>
-                  ))}
-                  <td class="num">{v.monthCount}/{monthsBack}</td>
-                  <td class="num"><strong>{formatZAR(v.avgMonthly)}</strong></td>
-                  <td>
+                  <td style="text-align:left">
                     {v.effective === "track" ? <span class="badge income">tracked</span>
                       : v.effective === "auto-track" ? <span class="badge income">auto</span>
                       : v.effective === "exclude" ? <span class="badge cost" title={v.rule?.reason ?? v.autoExcludeReason ?? ""}>excluded{v.rule?.reason === "payroll match" || v.autoExcludeReason === "payroll match" ? " · payroll" : v.rule?.reason === "contractor prefix" || v.autoExcludeReason === "contractor prefix" ? " · contractor" : ""}</span>
                       : <span class="badge actual">ignored (&lt;{minMonths} mo)</span>}
                   </td>
-                  <td>
+                  <td style="text-align:left">
                     <div class="row" style="gap:6px">
                       {v.effective !== "track" && v.effective !== "auto-track" ? (
                         <form method="post" action="/app/expenses/vendor-rule" style="margin:0">
@@ -98,6 +93,11 @@ export const VendorReviewPage: FC<{
                       ) : null}
                     </div>
                   </td>
+                  <td class="num"><strong>{formatZAR(v.avgMonthly)}</strong></td>
+                  <td class="num">{v.monthCount}/{monthsBack}</td>
+                  {monthCols.map((m) => (
+                    <td class="num muted">{v.months[m] ? formatZARCompact(v.months[m]) : "·"}</td>
+                  ))}
                 </tr>
               ))}
             </tbody>
