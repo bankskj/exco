@@ -21,9 +21,10 @@ export const CashflowDerivedPage: FC<{
   fy: number | null;
   fys: number[];
   basis: "cash" | "accrual";
+  collections: { month: string; invoiced: number; received: number; gap: number }[];
   syncNote?: string;
   saved?: boolean;
-}> = ({ cf, settings, fy, fys, basis, syncNote, saved }) => {
+}> = ({ cf, settings, fy, fys, basis, collections, syncNote, saved }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const visible = cf.columns.filter((c) => inFy(c.month));
   const boundary = settings.actuals_through;
@@ -112,6 +113,8 @@ export const CashflowDerivedPage: FC<{
           <div dangerouslySetInnerHTML={{ __html: comboBars(combo, { height: 280 }) }} />
         </div>
 
+        <CollectionsCard collections={collections} />
+
         <div class="section-block">
           <h3>Scenarios</h3>
           <div class="grid grid-3">
@@ -192,5 +195,53 @@ export const CashflowDerivedPage: FC<{
         </div>
       </div>
     </Layout>
+  );
+};
+
+const CollectionsCard: FC<{ collections: { month: string; invoiced: number; received: number; gap: number }[] }> = ({ collections }) => {
+  if (collections.length === 0) return null;
+  const totInvoiced = collections.reduce((s, r) => s + r.invoiced, 0);
+  const totReceived = collections.reduce((s, r) => s + r.received, 0);
+  const totGap = totInvoiced - totReceived;
+  const ratePct = totInvoiced ? Math.round((totReceived / totInvoiced) * 100) : 100;
+  const latest = collections[collections.length - 1];
+  const gapLine = collections.map((r) => ({ label: shortLabel(r.month), value: r.gap }));
+  return (
+    <div class="card section-block">
+      <div class="row spread">
+        <h3 style="margin:0">Collections gap — invoiced vs received</h3>
+        <span class="muted" style="font-size:12px">accrual income − cash income, complete months only</span>
+      </div>
+      <div class="kpis" style="margin:14px 0">
+        <div class="kpi"><div class="k-label">Outstanding (window)</div><div class={`k-value ${totGap > 0 ? "warn" : "pos"}`}>{formatZAR(totGap)}</div><div class="k-sub muted">billed but not yet collected</div></div>
+        <div class="kpi"><div class="k-label">Collection rate</div><div class={`k-value ${ratePct < 85 ? "neg" : ratePct < 95 ? "warn" : "pos"}`}>{ratePct}%</div><div class="k-sub muted">{formatZAR(totReceived)} of {formatZAR(totInvoiced)}</div></div>
+        <div class="kpi"><div class="k-label">Latest month gap</div><div class={`k-value ${latest.gap > 0 ? "warn" : "pos"}`}>{formatZAR(latest.gap)}</div><div class="k-sub muted">{label(latest.month)}</div></div>
+        <div class="kpi"><div class="k-label">Reading it</div><div class="k-value" style="font-size:14px;font-weight:500;line-height:1.4">Positive = billing ahead of cash; negative = collecting old debtors</div></div>
+      </div>
+      <div dangerouslySetInnerHTML={{ __html: lineChart(gapLine, { height: 180, color: "#f6c453" }) }} />
+      <div class="tablewrap" style="margin-top:12px">
+        <table class="grid">
+          <thead><tr><th style="text-align:left">Month</th><th>Invoiced (accrual)</th><th>Received (cash)</th><th>Gap</th><th>Collected</th></tr></thead>
+          <tbody>
+            {collections.map((r) => (
+              <tr>
+                <td style="text-align:left">{label(r.month)}</td>
+                <td class="num">{formatZAR(r.invoiced)}</td>
+                <td class="num">{formatZAR(r.received)}</td>
+                <td class={`num ${r.gap > 0 ? "warn" : "pos"}`}>{formatZAR(r.gap)}</td>
+                <td class="num">{r.invoiced ? Math.round((r.received / r.invoiced) * 100) : 100}%</td>
+              </tr>
+            ))}
+            <tr class="total">
+              <td style="text-align:left">Total</td>
+              <td class="num">{formatZAR(totInvoiced)}</td>
+              <td class="num">{formatZAR(totReceived)}</td>
+              <td class={`num ${totGap > 0 ? "warn" : "pos"}`}>{formatZAR(totGap)}</td>
+              <td class="num">{ratePct}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 };

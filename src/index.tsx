@@ -414,17 +414,27 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
   const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map());
+  // Collections gap: invoiced (accrual) vs received (cash) per complete month.
+  const collections = cf.months
+    .filter((m) => m <= settings.actuals_through)
+    .map((m) => {
+      const a = actuals.get(m);
+      const invoiced = a?.income_accr ?? 0;
+      const received = a?.income ?? 0;
+      return { month: m, invoiced, received, gap: invoiced - received };
+    })
+    .filter((r) => r.invoiced !== 0 || r.received !== 0);
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
     : undefined;
-  return { settings, cf, syncNote, overrideCats, adjCats, entries };
+  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections };
 }
 
 app.get("/app/accounts", async (c) => {
   const basis = c.req.query("basis") === "accrual" ? "accrual" as const : "cash" as const;
-  const { settings, cf, syncNote } = await loadDerived(c.env, basis);
+  const { settings, cf, syncNote, collections } = await loadDerived(c.env, basis);
   const [fys, fy] = parseFy(cf.months, c.req.query("fy"));
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} collections={collections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
