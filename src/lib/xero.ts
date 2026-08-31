@@ -183,21 +183,28 @@ export async function fetchVendorBillSummary(accessToken: string, tenantId: stri
   for (const src of sources)
   for (const inv of src.rows) {
     if (!src.statuses.includes(inv.Status)) continue;
-    // Bank rows: only spend money reconciled to a real payee. Generic
-    // "Bank Transaction" contacts are raw feed lines — transfers between own
-    // accounts, salary EFTs, SARS payments — not supplier expenses.
+    // Bank rows: only spend money reconciled to a real payee — with one
+    // exception: SARS payments (recognisable by reference) are real business
+    // outflows and group under a synthetic "SARS" vendor. Other generic
+    // "Bank Transaction" lines are transfers / salary EFTs — skipped.
+    let keyOverride: string | null = null;
+    let nameOverride: string | null = null;
     if (src.rows === bankTxns) {
       const cn = String(inv.Contact?.Name ?? "").trim();
-      if (!cn || /^bank transaction$/i.test(cn)) continue;
+      const ref = String(inv.Reference ?? "");
+      if (/\bSARS/i.test(ref) || /^SARS\b/i.test(cn)) {
+        keyOverride = "sars";
+        nameOverride = "SARS (tax)";
+      } else if (!cn || /^bank transaction$/i.test(cn)) continue;
     }
-    const key = String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
+    const key = keyOverride ?? String(inv.Contact?.ContactID ?? inv.Contact?.Name ?? "unknown");
     const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
     if (!month) continue;
     if (month < sinceMonth || month > currentMonth) continue;
     if (!byVendor.has(key)) {
       byVendor.set(key, {
         key,
-        name: String(inv.Contact?.Name ?? "Unknown vendor"),
+        name: nameOverride ?? String(inv.Contact?.Name ?? "Unknown vendor"),
         months: {},
         monthCount: 0,
         billCount: 0,
