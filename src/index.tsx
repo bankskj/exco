@@ -432,12 +432,17 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
     : undefined;
-  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections };
+  const debtorsDue = [...debtors.values()].reduce((t, d) => t + d.due, 0);
+  const revolving = Number((await getMeta(env.DB, "cf_revolving_owed")) ?? 0) || 0;
+  const nowMonth2 = new Date().toISOString().slice(0, 7);
+  const bankToday = cf.columns.find((col) => col.month === nowMonth2)?.balance ?? cf.kpis.currentCash;
+  const position = { bankToday, debtorsDue, revolving, month: nowMonth2 };
+  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections, position };
 }
 
 app.get("/app/accounts", async (c) => {
   // Cashflow is cash-basis only: the accrual P&L (matching Xero) lives on the Income tab.
-  const { settings, cf, syncNote, collections } = await loadDerived(c.env, "cash");
+  const { settings, cf, syncNote, collections, position } = await loadDerived(c.env, "cash");
   const fyRaw = c.req.query("fy");
   let [fys, fy] = parseFy(cf.months, fyRaw);
   // Default to the current fiscal year on first load; ?fy=all shows everything.
@@ -446,7 +451,7 @@ app.get("/app/accounts", async (c) => {
     if (fys.includes(curFy)) fy = curFy;
   }
   const visibleCollections = fy == null ? collections : collections.filter((r) => fiscalYearOf(r.month) === fy);
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} position={position} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
@@ -542,6 +547,7 @@ app.post("/app/accounts/settings", async (c) => {
     worst_income_pct: n(b.worst_income_pct, s.worst_income_pct),
     worst_cost_pct: n(b.worst_cost_pct, s.worst_cost_pct),
   });
+  if (b.revolving_owed != null) await setMeta(c.env.DB, "cf_revolving_owed", String(parseMoney(String(b.revolving_owed))));
   return c.redirect("/app/accounts?saved=1");
 });
 

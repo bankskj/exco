@@ -20,10 +20,11 @@ export const CashflowDerivedPage: FC<{
   settings: CFSettings;
   fy: number | null;
   fys: number[];
+  position: { bankToday: number; debtorsDue: number; revolving: number; month: string };
   collections: { month: string; invoiced: number; received: number; gap: number; stillDue: number | null }[];
   syncNote?: string;
   saved?: boolean;
-}> = ({ cf, settings, fy, fys, collections, syncNote, saved }) => {
+}> = ({ cf, settings, fy, fys, collections, position, syncNote, saved }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const visible = cf.columns.filter((c) => inFy(c.month));
   const boundary = settings.actuals_through;
@@ -87,6 +88,20 @@ export const CashflowDerivedPage: FC<{
             sub={rw.runwayMonth ? `Cash out ${label(rw.runwayMonth)}` : "Stays above zero through the forecast"} />
           <Kpi label="Projected balance" value={formatZAR(rw.projectedEndBalance)} tone={rw.projectedEndBalance < 0 ? "neg" : "pos"}
             sub={`End of forecast · low ${formatZAR(rw.lowest.balance)} (${label(rw.lowest.month)})`} />
+        </div>
+
+        <div class="card section-block">
+          <div class="row spread">
+            <h3 style="margin:0">Net position — bank + debtors − facilities</h3>
+            <span class="muted" style="font-size:12px">as at {label(position.month)}</span>
+          </div>
+          <div class="kpis" style="margin-top:14px">
+            <div class="kpi"><div class="k-label">Bank (modelled)</div><div class={`k-value ${position.bankToday < 0 ? "neg" : "pos"}`}>{formatZAR(position.bankToday)}</div><div class="k-sub muted">anchored {label(settings.opening_period)} at {formatZAR(settings.opening_balance)}</div></div>
+            <div class="kpi"><div class="k-label">+ Debtors outstanding</div><div class="k-value warn">{formatZAR(position.debtorsDue)}</div><div class="k-sub muted">live open invoice balances (credit notes not netted)</div></div>
+            <div class="kpi"><div class="k-label">− Revolving facility</div><div class="k-value neg">{formatZAR(position.revolving)}</div><div class="k-sub muted">owed on access facility</div></div>
+            {(() => { const net = position.bankToday + position.debtorsDue - position.revolving;
+              return <div class="kpi"><div class="k-label">= Net position</div><div class={`k-value ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</div><div class="k-sub muted">if all debtors paid &amp; facility settled</div></div>; })()}
+          </div>
         </div>
 
         <div class="card section-block">
@@ -181,6 +196,7 @@ export const CashflowDerivedPage: FC<{
             <div><label>Opening cash balance</label><input type="text" inputmode="decimal" name="opening_balance" value={String(settings.opening_balance)} /></div>
             <div><label>Opening month (YYYY-MM)</label><input type="text" name="opening_period" value={settings.opening_period} /></div>
             <div><label>Forecast horizon (months)</label><input type="number" name="horizon_months" value={String(settings.horizon_months)} /></div>
+            <div><label>Revolving facility owed (R)</label><input type="text" inputmode="decimal" name="revolving_owed" value={String(position.revolving)} /></div>
             <div><label>Best · income +%</label><input type="number" name="best_income_pct" value={String(settings.best_income_pct)} /></div>
             <div><label>Best · costs −%</label><input type="number" name="best_cost_pct" value={String(settings.best_cost_pct)} /></div>
             <div><label>Worst · income −%</label><input type="number" name="worst_income_pct" value={String(settings.worst_income_pct)} /></div>
