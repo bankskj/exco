@@ -445,7 +445,8 @@ app.get("/app/accounts", async (c) => {
     const curFy = fiscalYearOf(new Date().toISOString().slice(0, 7));
     if (fys.includes(curFy)) fy = curFy;
   }
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} collections={collections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  const visibleCollections = fy == null ? collections : collections.filter((r) => fiscalYearOf(r.month) === fy);
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} basis={basis} collections={visibleCollections} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
@@ -920,12 +921,21 @@ async function runXeroSync(env: Bindings): Promise<string> {
     const fy = fiscalYearOf(nowMonth);
     const curStart = `${fy - 1}-03`;
     const curCount = monthsBetweenIncl(curStart, nowMonth);
-    const [cashCur, cashPrior, accrCur, accrPrior] = await Promise.all([
-      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, true),
-      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12, true).catch(() => null),
-      fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, false),
-      fetchProfitAndLoss(token, tenantId, lastDayISO(`${fy - 1}-02`), 12, false).catch(() => null),
-    ]);
+    // Sequential: Xero rejects bursts of concurrent report calls.
+    const priorEnd = lastDayISO(`${fy - 1}-02`);
+    const cashCur = await fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, true);
+    const accrCur = await fetchProfitAndLoss(token, tenantId, lastDayISO(nowMonth), curCount, false);
+    let cashPrior: PnL | null = null;
+    let accrPrior: PnL | null = null;
+    let priorErr = "";
+    try {
+      cashPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, true);
+      accrPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, false);
+    } catch (e) {
+      priorErr = e instanceof Error ? e.message : "unknown";
+    }
+    if (priorErr) await setMeta(env.DB, "cf_prior_fy_error", priorErr);
+    else await setMeta(env.DB, "cf_prior_fy_error", "");
     const bucketed = (pnl: PnL | null): Map<string, { income: number; staff: number; dev: number; other: number }> => {
       const out = new Map<string, { income: number; staff: number; dev: number; other: number }>();
       if (!pnl) return out;
