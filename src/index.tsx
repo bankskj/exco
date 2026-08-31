@@ -634,7 +634,16 @@ app.get("/app/expenses", async (c) => {
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
   const pageN = Number(c.req.query("page"));
   const page = Number.isFinite(pageN) && pageN >= 1 ? Math.trunc(pageN) : 1;
-  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} msg={msg} />);
+  const sortRaw = c.req.query("sort");
+  const sort = sortRaw === "amount" || sortRaw === "monthly" ? sortRaw : "name";
+  const dirRaw = c.req.query("dir");
+  const dir: "asc" | "desc" = dirRaw === "asc" || dirRaw === "desc" ? dirRaw : sort === "name" ? "asc" : "desc";
+  const cmp = (a: (typeof expenses)[number], b: (typeof expenses)[number]) =>
+    sort === "name" ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    : sort === "amount" ? a.amount - b.amount
+    : monthlyEquivalent(a) - monthlyEquivalent(b);
+  expenses.sort((a, b) => b.active - a.active || (dir === "asc" ? cmp(a, b) : cmp(b, a)));
+  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} msg={msg} />);
 });
 
 app.post("/app/expenses/add", async (c) => {
@@ -656,18 +665,24 @@ app.post("/app/expenses/add", async (c) => {
   return c.redirect("/app/expenses");
 });
 
+function expenseListQs(b: Record<string, unknown>): string {
+  const q = new URLSearchParams();
+  if (/^\d+$/.test(String(b.page))) q.set("page", String(b.page));
+  if (["name", "amount", "monthly"].includes(String(b.sort))) q.set("sort", String(b.sort));
+  if (["asc", "desc"].includes(String(b.dir))) q.set("dir", String(b.dir));
+  return q.toString();
+}
+
 app.post("/app/expenses/toggle", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await toggleExpense(c.env.DB, String(b.id));
-  const pg = /^\d+$/.test(String(b.page)) ? `?page=${b.page}` : "";
-  return c.redirect(`/app/expenses${pg}`);
+  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
 });
 
 app.post("/app/expenses/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteExpense(c.env.DB, String(b.id));
-  const pg = /^\d+$/.test(String(b.page)) ? `?page=${b.page}` : "";
-  return c.redirect(`/app/expenses${pg}`);
+  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
 });
 
 app.get("/app/expenses/export.csv", async (c) => {

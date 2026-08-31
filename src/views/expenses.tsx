@@ -16,18 +16,29 @@ const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = (
 
 const PAGE_SIZE = 20;
 
+type SortKey = "name" | "amount" | "monthly";
+
 export const ExpensesPage: FC<{
   expenses: RecurringExpense[];
   xero: XeroState;
   page: number;
+  sort: SortKey;
+  dir: "asc" | "desc";
   msg?: string;
-}> = ({ expenses, xero, page, msg }) => {
+}> = ({ expenses, xero, page, sort, dir, msg }) => {
   const active = expenses.filter((e) => e.active);
   const monthlyTotal = active.reduce((s, e) => s + monthlyEquivalent(e), 0);
   const fromXero = active.filter((e) => e.source === "xero").length;
   const pageCount = Math.max(1, Math.ceil(expenses.length / PAGE_SIZE));
   const p = Math.min(Math.max(1, page), pageCount);
   const rows = expenses.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE);
+  // Sortable header link: clicking the active column flips direction; a new column gets its natural default.
+  const sortHref = (col: SortKey) => {
+    const nextDir = sort === col ? (dir === "asc" ? "desc" : "asc") : col === "name" ? "asc" : "desc";
+    return `/app/expenses?sort=${col}&dir=${nextDir}`;
+  };
+  const arrow = (col: SortKey) => (sort === col ? (dir === "asc" ? " ▲" : " ▼") : "");
+  const listQs = `sort=${sort}&dir=${dir}`;
 
   const byCategory = (() => {
     const m = new Map<string, number>();
@@ -71,7 +82,16 @@ export const ExpensesPage: FC<{
                 <col style="width:11%" />
               </colgroup>
               <thead>
-                <tr><th style="text-align:left">Expense</th><th>Category</th><th>Amount</th><th>Frequency</th><th>Monthly equiv</th><th>Next</th><th>Source</th><th></th></tr>
+                <tr>
+                  <th style="text-align:left"><a href={sortHref("name")} style="color:inherit">Expense{arrow("name")}</a></th>
+                  <th>Category</th>
+                  <th><a href={sortHref("amount")} style="color:inherit">Amount{arrow("amount")}</a></th>
+                  <th>Frequency</th>
+                  <th><a href={sortHref("monthly")} style="color:inherit">Monthly equiv{arrow("monthly")}</a></th>
+                  <th>Next</th>
+                  <th>Source</th>
+                  <th></th>
+                </tr>
               </thead>
               <tbody>
                 {rows.map((e) => (
@@ -91,12 +111,16 @@ export const ExpensesPage: FC<{
                         <form method="post" action="/app/expenses/toggle" style="margin:0">
                           <input type="hidden" name="id" value={e.id} />
                           <input type="hidden" name="page" value={String(p)} />
+                          <input type="hidden" name="sort" value={sort} />
+                          <input type="hidden" name="dir" value={dir} />
                           <button class="btn btn-sm" type="submit">{e.active ? "Pause" : "Resume"}</button>
                         </form>
                         <form method="post" action="/app/expenses/delete" style="margin:0"
                           onsubmit="return confirm('Delete this expense?')">
                           <input type="hidden" name="id" value={e.id} />
                           <input type="hidden" name="page" value={String(p)} />
+                          <input type="hidden" name="sort" value={sort} />
+                          <input type="hidden" name="dir" value={dir} />
                           <button class="btn btn-sm btn-danger" type="submit">✕</button>
                         </form>
                       </div>
@@ -114,9 +138,9 @@ export const ExpensesPage: FC<{
           </div>
           {pageCount > 1 ? (
             <div class="pager">
-              {p > 1 ? <a class="btn btn-sm" href={`/app/expenses?page=${p - 1}`}>← Prev</a> : null}
+              {p > 1 ? <a class="btn btn-sm" href={`/app/expenses?page=${p - 1}&${listQs}`}>← Prev</a> : null}
               <span class="muted">Page {p} of {pageCount} · {expenses.length} expenses</span>
-              {p < pageCount ? <a class="btn btn-sm" href={`/app/expenses?page=${p + 1}`}>Next →</a> : null}
+              {p < pageCount ? <a class="btn btn-sm" href={`/app/expenses?page=${p + 1}&${listQs}`}>Next →</a> : null}
             </div>
           ) : null}
         </div>
