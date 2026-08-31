@@ -55,6 +55,27 @@ export function shortLabel(period: string): string {
   return `${MONTHS[month - 1]} '${String(year).slice(2)}`;
 }
 
+/**
+ * Parse a user-typed date to ISO 'YYYY-MM-DD'. Accepts dd/mm/yyyy (SA
+ * convention, also with - or . separators) and yyyy-mm-dd / yyyy/mm/dd.
+ * Returns null when invalid.
+ */
+export function parseDateInput(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  let y: number, m: number, d: number;
+  let match: RegExpMatchArray | null;
+  if ((match = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/))) {
+    y = +match[1]; m = +match[2]; d = +match[3];
+  } else if ((match = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/))) {
+    d = +match[1]; m = +match[2]; y = +match[3];
+  } else return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
 /** 'YYYY-MM-DD' → 'DD/MM/YYYY' (SA convention); anything else → '—'. */
 export function formatDMY(iso: string | null | undefined): string {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";

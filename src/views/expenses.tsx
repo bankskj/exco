@@ -220,7 +220,7 @@ export const ExpensesPage: FC<{
                     {FREQUENCIES.map((f) => <option value={f.key} selected={f.key === "monthly"}>{f.label}</option>)}
                   </select>
                 </div>
-                <div><label>Next date</label><input type="date" name="next_date" /></div>
+                <div><label>Next date (dd/mm/yyyy)</label><input type="text" name="next_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
                 <div class="full"><label>Notes</label><input type="text" name="notes" /></div>
                 <div><button class="btn btn-primary" type="submit">Add expense</button></div>
               </form>

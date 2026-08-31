@@ -56,7 +56,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, parseDateInput } from "./lib/period";
 
 /** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
 function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
@@ -501,7 +501,7 @@ app.post("/app/hr/employee", async (c) => {
       position: String(b.position ?? "").trim() || null,
       team: String(b.team ?? "").trim() || null,
       manager: String(b.manager ?? "").trim() || null,
-      start_date: isDate(String(b.start_date)) ? String(b.start_date) : null,
+      start_date: parseDateInput(String(b.start_date)),
     });
     return c.redirect(`/app/hr/${id}`);
   }
@@ -561,8 +561,8 @@ app.post("/app/hr/:id/update", async (c) => {
     team: String(b.team ?? "").trim() || null,
     manager: String(b.manager ?? "").trim() || null,
     employee_no: emp.employee_no,
-    start_date: isDate(String(b.start_date)) ? String(b.start_date) : null,
-    end_date: isDate(String(b.end_date)) ? String(b.end_date) : null,
+    start_date: parseDateInput(String(b.start_date)),
+    end_date: parseDateInput(String(b.end_date)),
   });
   return c.redirect(`/app/hr/${id}?saved=1`);
 });
@@ -582,7 +582,7 @@ app.post("/app/hr/:id/note", async (c) => {
     kind,
     title,
     body: String(body.body ?? "").trim() || null,
-    note_date: isDate(String(body.note_date)) ? String(body.note_date) : null,
+    note_date: parseDateInput(String(body.note_date)),
   });
   // Attachments → R2 + documents registry.
   const raw = body.files;
@@ -667,7 +667,7 @@ app.post("/app/expenses/add", async (c) => {
       amount: parseMoney(String(b.amount ?? "0")),
       frequency: freq.key,
       interval_months: freq.months,
-      next_date: isDate(String(b.next_date)) ? String(b.next_date) : null,
+      next_date: parseDateInput(String(b.next_date)),
       notes: String(b.notes ?? "").trim() || null,
     });
   }
