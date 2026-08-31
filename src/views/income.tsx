@@ -128,12 +128,13 @@ export const IncomePage: FC<{
           <div class="tablewrap">
             <table class="grid">
               <thead>
-                <tr><th style="text-align:left">Month</th><th>Income</th><th>Staff</th><th>Dev / freelance</th><th>Other expenses</th><th>Total expenses</th><th>Net</th><th>NI margin</th></tr>
+                <tr><th style="text-align:left">Month</th><th>Income</th><th>Staff</th><th>Dev / freelance</th><th>Other expenses</th><th>Total expenses</th><th>Net</th><th>Cumulative net</th><th>NI margin</th></tr>
               </thead>
               <tbody>
-                {pnl.months.map((m, i) => {
+                {(() => { let cum = 0; return pnl.months.map((m, i) => {
                   const exp = pnl.cosTotal[i] + pnl.opexTotal[i];
                   const netM = pnl.incomeTotal[i] - exp;
+                  cum += netM;
                   const staff = buckets.find((b) => b.key === "staff")!.total[i];
                   const dev = buckets.find((b) => b.key === "dev")!.total[i];
                   const other = buckets.find((b) => b.key === "other")!.total[i];
@@ -146,10 +147,11 @@ export const IncomePage: FC<{
                       <td class="num">{formatZAR(other)}</td>
                       <td class="num">{formatZAR(exp)}</td>
                       <td class={`num ${netM < 0 ? "neg" : "pos"}`}>{formatZAR(netM)}</td>
+                      <td class={`num ${cum < 0 ? "neg" : "pos"}`}>{formatZAR(cum)}</td>
                       <td class={`num ${netM < 0 ? "neg" : ""}`}>{pct(netM, pnl.incomeTotal[i])}%</td>
                     </tr>
                   );
-                })}
+                }); })()}
                 <tr class="total">
                   <td style="text-align:left">Total</td>
                   <td class="num">{formatZAR(income)}</td>
@@ -157,6 +159,7 @@ export const IncomePage: FC<{
                   <td class="num">{formatZAR(sum(buckets.find((b) => b.key === "dev")!.total))}</td>
                   <td class="num">{formatZAR(sum(buckets.find((b) => b.key === "other")!.total))}</td>
                   <td class="num">{formatZAR(expenses)}</td>
+                  <td class={`num ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</td>
                   <td class={`num ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</td>
                   <td class="num">{nim}%</td>
                 </tr>

@@ -50,6 +50,14 @@ export const CashflowDerivedPage: FC<{
 
         {saved ? <div class="callout" style="margin-bottom:16px">✓ Saved.</div> : null}
         {syncNote ? <div class="callout" style="margin-bottom:16px;border-left-color:var(--danger)">{syncNote}</div> : null}
+        {settings.opening_balance === 1000000 && settings.opening_period <= "2025-03" ? (
+          <div class="callout" style="margin-bottom:16px;border-left-color:#f6c453">
+            <strong>Balance line not anchored yet.</strong> The running balance starts from a placeholder
+            (R 1 000 000 at Mar 2025), so its level is meaningless — only the month-to-month movement is real.
+            In <strong>Model settings</strong> below, set the opening month to a recent month and enter the actual
+            bank balance at the start of it; every figure after that becomes a true bank trajectory.
+          </div>
+        ) : null}
 
         <AccountsTabs active="cashflow" />
 
