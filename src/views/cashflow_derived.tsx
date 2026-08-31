@@ -21,7 +21,7 @@ export const CashflowDerivedPage: FC<{
   fy: number | null;
   fys: number[];
   basis: "cash" | "accrual";
-  collections: { month: string; invoiced: number; received: number; gap: number }[];
+  collections: { month: string; invoiced: number; received: number; gap: number; stillDue: number | null }[];
   syncNote?: string;
   saved?: boolean;
 }> = ({ cf, settings, fy, fys, basis, collections, syncNote, saved }) => {
@@ -198,30 +198,31 @@ export const CashflowDerivedPage: FC<{
   );
 };
 
-const CollectionsCard: FC<{ collections: { month: string; invoiced: number; received: number; gap: number }[] }> = ({ collections }) => {
+const CollectionsCard: FC<{ collections: { month: string; invoiced: number; received: number; gap: number; stillDue: number | null }[] }> = ({ collections }) => {
   if (collections.length === 0) return null;
   const totInvoiced = collections.reduce((s, r) => s + r.invoiced, 0);
   const totReceived = collections.reduce((s, r) => s + r.received, 0);
   const totGap = totInvoiced - totReceived;
   const ratePct = totInvoiced ? Math.round((totReceived / totInvoiced) * 100) : 100;
+  const totDue = collections.reduce((s, r) => s + (r.stillDue ?? 0), 0);
   const latest = collections[collections.length - 1];
   const gapLine = collections.map((r) => ({ label: shortLabel(r.month), value: r.gap }));
   return (
     <div class="card section-block">
       <div class="row spread">
         <h3 style="margin:0">Collections gap — invoiced vs received</h3>
-        <span class="muted" style="font-size:12px">accrual income − cash income, complete months only</span>
+        <span class="muted" style="font-size:12px">invoiced vs banked per month; 'still unpaid' is live from the invoices</span>
       </div>
       <div class="kpis" style="margin:14px 0">
         <div class="kpi"><div class="k-label">Outstanding (window)</div><div class={`k-value ${totGap > 0 ? "warn" : "pos"}`}>{formatZAR(totGap)}</div><div class="k-sub muted">billed but not yet collected</div></div>
         <div class="kpi"><div class="k-label">Collection rate</div><div class={`k-value ${ratePct < 85 ? "neg" : ratePct < 95 ? "warn" : "pos"}`}>{ratePct}%</div><div class="k-sub muted">{formatZAR(totReceived)} of {formatZAR(totInvoiced)}</div></div>
+        <div class="kpi"><div class="k-label">Still unpaid today</div><div class={`k-value ${totDue > 0 ? "warn" : "pos"}`}>{formatZAR(totDue)}</div><div class="k-sub muted">open balances on these months' invoices</div></div>
         <div class="kpi"><div class="k-label">Latest month gap</div><div class={`k-value ${latest.gap > 0 ? "warn" : "pos"}`}>{formatZAR(latest.gap)}</div><div class="k-sub muted">{label(latest.month)}</div></div>
-        <div class="kpi"><div class="k-label">Reading it</div><div class="k-value" style="font-size:14px;font-weight:500;line-height:1.4">Positive = billing ahead of cash; negative = collecting old debtors</div></div>
       </div>
       <div dangerouslySetInnerHTML={{ __html: lineChart(gapLine, { height: 180, color: "#f6c453" }) }} />
       <div class="tablewrap" style="margin-top:12px">
         <table class="grid">
-          <thead><tr><th style="text-align:left">Month</th><th>Invoiced (accrual)</th><th>Received (cash)</th><th>Gap</th><th>Collected</th></tr></thead>
+          <thead><tr><th style="text-align:left">Month</th><th>Invoiced (accrual)</th><th>Received (cash)</th><th>Gap</th><th>Collected</th><th>Still unpaid today</th></tr></thead>
           <tbody>
             {collections.map((r) => (
               <tr>
@@ -230,6 +231,7 @@ const CollectionsCard: FC<{ collections: { month: string; invoiced: number; rece
                 <td class="num">{formatZAR(r.received)}</td>
                 <td class={`num ${r.gap > 0 ? "warn" : "pos"}`}>{formatZAR(r.gap)}</td>
                 <td class="num">{r.invoiced ? Math.round((r.received / r.invoiced) * 100) : 100}%</td>
+                <td class={`num ${(r.stillDue ?? 0) > 0 ? "warn" : "pos"}`}>{r.stillDue != null ? formatZAR(r.stillDue) : "—"}</td>
               </tr>
             ))}
             <tr class="total">
@@ -238,6 +240,7 @@ const CollectionsCard: FC<{ collections: { month: string; invoiced: number; rece
               <td class="num">{formatZAR(totReceived)}</td>
               <td class={`num ${totGap > 0 ? "warn" : "pos"}`}>{formatZAR(totGap)}</td>
               <td class="num">{ratePct}%</td>
+              <td class={`num ${totDue > 0 ? "warn" : "pos"}`}>{formatZAR(totDue)}</td>
             </tr>
           </tbody>
         </table>

@@ -411,3 +411,31 @@ export async function fetchProfitAndLoss(accessToken: string, tenantId: string, 
     opexTotal: remap(opexTotal ?? sumRows(opexRows)),
   };
 }
+
+// ---- debtors: sales-invoice cohorts by billing month ------------------------
+
+export type DebtorCohort = { month: string; billed: number; paid: number; due: number };
+
+/** ACCREC invoices since `sinceISO`, grouped by billing month with paid/due. */
+export async function fetchDebtorCohorts(accessToken: string, tenantId: string, sinceISO: string): Promise<DebtorCohort[]> {
+  const [y, m] = sinceISO.split("-");
+  const q = new URLSearchParams({ where: `Type=="ACCREC" AND Date >= DateTime(${y},${m},01)` });
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Xero ACCREC invoices ${res.status}`);
+  const data = (await res.json()) as any;
+  const byMonth = new Map<string, DebtorCohort>();
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  for (const inv of data.Invoices ?? []) {
+    if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
+    const month = (parseXeroDate(inv.Date) ?? "").slice(0, 7);
+    if (!month || month > nowMonth || month < "2020-01") continue;
+    if (!byMonth.has(month)) byMonth.set(month, { month, billed: 0, paid: 0, due: 0 });
+    const c = byMonth.get(month)!;
+    c.billed += Number(inv.Total ?? 0);
+    c.paid += Number(inv.AmountPaid ?? 0);
+    c.due += Number(inv.AmountDue ?? 0);
+  }
+  return [...byMonth.values()].sort((a, b) => (a.month < b.month ? -1 : 1));
+}

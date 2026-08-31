@@ -130,3 +130,19 @@ export async function listCfActuals(db: D1Database): Promise<Map<string, CfActua
   const { results } = await db.prepare("SELECT month, income, staff, dev, other, income_accr, staff_accr, dev_accr, other_accr FROM cf_actuals").all<CfActual>();
   return new Map((results ?? []).map((r) => [r.month, r]));
 }
+
+// ---- debtors cohorts ---------------------------------------------------------
+
+export type CfDebtor = { month: string; billed: number; paid: number; due: number };
+
+export async function replaceCfDebtors(db: D1Database, rows: CfDebtor[]): Promise<void> {
+  await db.prepare("DELETE FROM cf_debtors").run();
+  const stmt = db.prepare("INSERT INTO cf_debtors (month, billed, paid, due) VALUES (?, ?, ?, ?)");
+  const binds = rows.map((r) => stmt.bind(r.month, r.billed, r.paid, r.due));
+  if (binds.length) await db.batch(binds);
+}
+
+export async function listCfDebtors(db: D1Database): Promise<Map<string, CfDebtor>> {
+  const { results } = await db.prepare("SELECT month, billed, paid, due FROM cf_debtors").all<CfDebtor>();
+  return new Map((results ?? []).map((r) => [r.month, r]));
+}

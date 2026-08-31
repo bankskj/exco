@@ -29,7 +29,7 @@ import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualIt
 import { IncomePage, type ExpenseBucket } from "./views/income";
 import { CashflowDerivedPage } from "./views/cashflow_derived";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, type PnL, type PnLRow } from "./lib/xero";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -57,6 +57,8 @@ import {
   saveSettings,
   upsertCfActuals,
   listCfActuals,
+  replaceCfDebtors,
+  listCfDebtors,
   type CfActual,
 } from "./data/cashflow";
 import { getMeta, setMeta } from "./data/db";
@@ -414,14 +416,17 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
   const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map());
-  // Collections gap: invoiced (accrual) vs received (cash) per complete month.
+  // Collections gap: invoiced (accrual) vs received (cash) per complete month,
+  // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
+  const debtors = await listCfDebtors(env.DB);
   const collections = cf.months
     .filter((m) => m <= settings.actuals_through)
     .map((m) => {
       const a = actuals.get(m);
       const invoiced = a?.income_accr ?? 0;
       const received = a?.income ?? 0;
-      return { month: m, invoiced, received, gap: invoiced - received };
+      const d = debtors.get(m);
+      return { month: m, invoiced, received, gap: invoiced - received, stillDue: d?.due ?? null };
     })
     .filter((r) => r.invoiced !== 0 || r.received !== 0);
   const syncNote = actuals.size === 0
@@ -944,6 +949,8 @@ async function runXeroSync(env: Bindings): Promise<string> {
       return { month, income: c.income, staff: c.staff, dev: c.dev, other: c.other, income_accr: a.income, staff_accr: a.staff, dev_accr: a.dev, other_accr: a.other };
     });
     await upsertCfActuals(env.DB, rows);
+    const cohorts = await fetchDebtorCohorts(token, tenantId, `${fy - 2}-03`);
+    await replaceCfDebtors(env.DB, cohorts);
     await setMeta(env.DB, "cf_actuals_synced", new Date().toISOString());
   } catch {
     // P&L scope not consented yet — cashflow keeps its last actuals
