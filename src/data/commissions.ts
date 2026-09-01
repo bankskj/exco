@@ -66,6 +66,18 @@ export async function setCommissionAmounts(db: D1Database, id: string, invoiceNe
     .run();
 }
 
+/** Edit a deal's descriptive fields (money fields have their own route). */
+export async function updateCommissionDetails(
+  db: D1Database,
+  id: string,
+  d: { staff: string; allocation: string; client: string | null; po_number: string | null; quote_no: string | null; invoice_no: string | null; deal_date: string | null },
+): Promise<void> {
+  await db
+    .prepare("UPDATE commissions SET staff=?, allocation=?, client=?, po_number=?, quote_no=?, invoice_no=?, deal_date=?, updated_at=datetime('now') WHERE id=?")
+    .bind(d.staff, d.allocation, d.client, d.po_number, d.quote_no, d.invoice_no, d.deal_date, id)
+    .run();
+}
+
 export async function setCommissionStage(db: D1Database, id: string, stage: string): Promise<void> {
   await db.prepare("UPDATE commissions SET stage=?, updated_at=datetime('now') WHERE id=?").bind(stage, id).run();
 }

@@ -29,7 +29,7 @@ import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualIt
 import { IncomePage, type ExpenseBucket } from "./views/income";
 import { CashflowDerivedPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
-import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
+import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
@@ -1163,6 +1163,25 @@ app.post("/app/accounts/deals/amounts", async (c) => {
     await setCommissionAmounts(c.env.DB, String(b.id), num(b.invoice_nett), num(b.comm_amount), num(b.comm_pct));
   }
   return c.redirect("/app/accounts/deals");
+});
+
+app.post("/app/accounts/deals/update", async (c) => {
+  const b = await c.req.parseBody();
+  const id = String(b.id ?? "");
+  const staff = String(b.staff ?? "").trim();
+  const allocation = String(b.allocation ?? "").trim();
+  if (id && staff && allocation) {
+    await updateCommissionDetails(c.env.DB, id, {
+      staff,
+      allocation,
+      client: String(b.client ?? "").trim() || null,
+      po_number: String(b.po_number ?? "").trim() || null,
+      quote_no: String(b.quote_no ?? "").trim() || null,
+      invoice_no: String(b.invoice_no ?? "").trim() || null,
+      deal_date: parseDateInput(String(b.deal_date)),
+    });
+  }
+  return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
 });
 
 app.post("/app/accounts/deals/stage", async (c) => {

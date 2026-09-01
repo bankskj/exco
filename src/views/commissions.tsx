@@ -191,6 +191,21 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
         <strong>{deal.allocation} — ledger</strong>
         <span class="muted" style="font-size:12px">invoiced {formatZAR(invoiced)} · paid {formatZAR(paid)} · outstanding {formatZAR(invoiced - paid)}</span>
       </div>
+
+      <details style="margin-bottom:14px">
+        <summary style="cursor:pointer;color:var(--accent);font-size:13px">✏️ Edit deal details</summary>
+        <form method="post" action="/app/accounts/deals/update" class="formgrid" style="margin-top:12px">
+          <input type="hidden" name="id" value={deal.id} />
+          <div><label>Allocation</label><input type="text" name="allocation" value={deal.allocation} required style="text-align:left" /></div>
+          <div><label>Staff (earner)</label><input type="text" name="staff" value={deal.staff} required style="text-align:left" /></div>
+          <div><label>Client</label><input type="text" name="client" value={deal.client ?? ""} style="text-align:left" /></div>
+          <div><label>Date</label><DateField name="deal_date" value={deal.deal_date ? formatDMY(deal.deal_date) : ""} /></div>
+          <div><label>Quote #</label><input type="text" name="quote_no" value={deal.quote_no ?? ""} style="text-align:left" /></div>
+          <div><label>PO #</label><input type="text" name="po_number" value={deal.po_number ?? ""} style="text-align:left" /></div>
+          <div><label>Invoice #</label><input type="text" name="invoice_no" value={deal.invoice_no ?? ""} style="text-align:left" /></div>
+          <div><button class="btn btn-primary" type="submit">Save details</button></div>
+        </form>
+      </details>
       <table style="border-collapse:collapse;font-size:13px;width:100%">
         <thead>
           <tr>
