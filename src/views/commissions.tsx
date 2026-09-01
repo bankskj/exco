@@ -83,7 +83,8 @@ export const CommissionsPage: FC<{
             <table class="grid">
               <thead>
                 <tr>
-                  <th style="text-align:left">Allocation</th><th>Staff</th><th>Client</th><th>PO #</th>
+                  <th style="text-align:left">Allocation</th><th>Date</th><th>Staff</th><th>Client</th>
+                  <th>Quote #</th><th>PO #</th><th>Invoice #</th>
                   <th>Stage</th><th>Invoiced</th><th>Paid</th><th>Comm %</th><th>Comm earned</th><th></th>
                 </tr>
               </thead>
@@ -96,9 +97,12 @@ export const CommissionsPage: FC<{
                         {d.allocation} <span class="muted" style="font-size:10px">{openId === d.id ? "▲" : "▼"}</span>
                       </a>
                     </td>
+                    <td>{d.deal_date ? formatDMY(d.deal_date) : "—"}</td>
                     <td>{d.staff}</td>
                     <td class="muted">{d.client || "—"}</td>
+                    <td class="muted">{d.quote_no || "—"}</td>
                     <td class="muted">{d.po_number || "—"}</td>
+                    <td class="muted">{d.invoice_no || "—"}</td>
                     <td>
                       <form method="post" action="/app/accounts/commissions/stage" style="margin:0">
                         <input type="hidden" name="id" value={d.id} />
@@ -121,7 +125,7 @@ export const CommissionsPage: FC<{
                   </tr>
                   {openId === d.id ? (
                     <tr>
-                      <td colspan={10} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={13} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <DealLedger deal={d} lines={linesByDeal.get(d.id) ?? []} />
                       </td>
                     </tr>
@@ -141,6 +145,9 @@ export const CommissionsPage: FC<{
               <datalist id="staffnames">{staffNames.map((n) => <option value={n} />)}</datalist>
             </div>
             <div><label>Allocation</label><input type="text" name="allocation" required placeholder="e.g. SAP Analyst - Bonus" /></div>
+            <div><label>Date (dd/mm/yyyy)</label><input type="text" name="deal_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
+            <div><label>Quote #</label><input type="text" name="quote_no" placeholder="e.g. QU-0012" /></div>
+            <div><label>Invoice #</label><input type="text" name="invoice_no" placeholder="e.g. INV-00055" /></div>
             <div><label>Client</label><input type="text" name="client" placeholder="e.g. Illovo" /></div>
             <div><label>PO #</label><input type="text" name="po_number" placeholder="e.g. 4500302389" /></div>
             <div><label>Commission %</label><input type="text" inputmode="decimal" name="comm_pct" placeholder="e.g. 10" /></div>

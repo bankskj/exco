@@ -15,6 +15,9 @@ export type Commission = {
   comm_pct: number | null;
   stage: CommStage;
   notes: string | null;
+  quote_no: string | null;
+  invoice_no: string | null;
+  deal_date: string | null;
 };
 
 export type CommissionLine = {
@@ -32,7 +35,7 @@ export type CommissionLine = {
 
 export async function listCommissions(db: D1Database): Promise<Commission[]> {
   const { results } = await db
-    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes FROM commissions ORDER BY created_at DESC")
+    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date FROM commissions ORDER BY COALESCE(deal_date, created_at) DESC")
     .all<Commission>();
   return results ?? [];
 }
@@ -40,8 +43,8 @@ export async function listCommissions(db: D1Database): Promise<Commission[]> {
 export async function createCommission(db: D1Database, c: Partial<Commission> & { staff: string; allocation: string }): Promise<string> {
   const id = uuid();
   await db
-    .prepare("INSERT INTO commissions (id, staff, allocation, client, po_number, comm_pct, stage, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(id, c.staff, c.allocation, c.client ?? null, c.po_number ?? null, c.comm_pct ?? null, c.stage ?? "quote", c.notes ?? null)
+    .prepare("INSERT INTO commissions (id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, c.staff, c.allocation, c.client ?? null, c.po_number ?? null, c.comm_pct ?? null, c.stage ?? "quote", c.notes ?? null, c.quote_no ?? null, c.invoice_no ?? null, c.deal_date ?? null)
     .run();
   return id;
 }

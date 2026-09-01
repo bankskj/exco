@@ -1118,6 +1118,9 @@ app.post("/app/accounts/commissions/add", async (c) => {
       po_number: String(b.po_number ?? "").trim() || null,
       comm_pct: pctRaw === "" ? null : parseMoney(pctRaw),
       stage: COMM_STAGES.includes(String(b.stage) as any) ? (String(b.stage) as any) : "quote",
+      quote_no: String(b.quote_no ?? "").trim() || null,
+      invoice_no: String(b.invoice_no ?? "").trim() || null,
+      deal_date: parseDateInput(String(b.deal_date)),
     });
     return c.redirect(`/app/accounts/commissions?open=${id}&saved=1`);
   }
@@ -1166,12 +1169,12 @@ app.post("/app/accounts/commissions/line/delete", async (c) => {
 app.get("/app/accounts/commissions/export.csv", async (c) => {
   const [deals, lines] = await Promise.all([listCommissions(c.env.DB), listAllLines(c.env.DB)]);
   const byId = new Map(deals.map((d) => [d.id, d]));
-  const head = ["Deal", "Staff", "Client", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
+  const head = ["Deal", "Deal Date", "Staff", "Client", "Quote #", "Invoice #", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
   const out = [head.join(",")];
   for (const l of lines) {
     const d = byId.get(l.commission_id);
     out.push([
-      csv(d?.allocation ?? ""), csv(d?.staff ?? ""), csv(d?.client ?? ""), d?.stage ?? "",
+      csv(d?.allocation ?? ""), d?.deal_date ? formatDMY(d.deal_date) : "", csv(d?.staff ?? ""), csv(d?.client ?? ""), csv(d?.quote_no ?? ""), csv(d?.invoice_no ?? ""), d?.stage ?? "",
       l.tx_date ? formatDMY(l.tx_date) : "", csv(l.reference ?? ""), csv(l.tx_type ?? ""), csv(l.allocation ?? ""),
       csv(l.po_number ?? ""), csv(l.description ?? ""),
       l.payment ? l.payment.toFixed(2) : "", l.invoice ? l.invoice.toFixed(2) : "",
