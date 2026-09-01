@@ -5,11 +5,12 @@ import { formatZAR } from "../lib/money";
 import { label, shortLabel, fyLabel, fyRangeLabel } from "../lib/period";
 import { comboBars, hBars } from "../lib/charts";
 
-export const AccountsTabs: FC<{ active: "cashflow" | "income" | "grid" }> = ({ active }) => (
+export const AccountsTabs: FC<{ active: "cashflow" | "income" | "grid" | "commissions" }> = ({ active }) => (
   <div class="segmented" style="margin:14px 0 4px">
     <a href="/app/accounts" class={active === "cashflow" ? "seg active" : "seg"}>Cashflow</a>
     <a href="/app/accounts/edit" class={active === "grid" ? "seg active" : "seg"}>Forecast grid</a>
     <a href="/app/accounts/income" class={active === "income" ? "seg active" : "seg"}>Income</a>
+    <a href="/app/accounts/commissions" class={active === "commissions" ? "seg active" : "seg"}>Commissions</a>
   </div>
 );
 

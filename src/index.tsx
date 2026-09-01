@@ -28,6 +28,8 @@ import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
 import { IncomePage, type ExpenseBucket } from "./views/income";
 import { CashflowDerivedPage } from "./views/cashflow_derived";
+import { CommissionsPage } from "./views/commissions";
+import { listCommissions, createCommission, setCommissionStage, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
@@ -1082,6 +1084,100 @@ app.get("/app/accounts/income", async (c) => {
     r.values.forEach((v, i) => (b.total[i] += v));
   }
   return c.html(<IncomePage fy={fy} fys={fys} pnl={pnl} prior={prior} buckets={buckets} error={error} />);
+});
+
+// ----- Commissions -----
+
+app.get("/app/accounts/commissions", async (c) => {
+  const [deals, lines, employees] = await Promise.all([
+    listCommissions(c.env.DB),
+    listAllLines(c.env.DB),
+    listEmployees(c.env.DB),
+  ]);
+  const linesByDeal = new Map<string, typeof lines>();
+  for (const l of lines) {
+    if (!linesByDeal.has(l.commission_id)) linesByDeal.set(l.commission_id, []);
+    linesByDeal.get(l.commission_id)!.push(l);
+  }
+  const openId = c.req.query("open") ?? null;
+  return c.html(
+    <CommissionsPage deals={deals} linesByDeal={linesByDeal} staffNames={employees.map((e) => e.name)} openId={openId} saved={c.req.query("saved") === "1"} />,
+  );
+});
+
+app.post("/app/accounts/commissions/add", async (c) => {
+  const b = await c.req.parseBody();
+  const staff = String(b.staff ?? "").trim();
+  const allocation = String(b.allocation ?? "").trim();
+  if (staff && allocation) {
+    const pctRaw = String(b.comm_pct ?? "").trim();
+    const id = await createCommission(c.env.DB, {
+      staff,
+      allocation,
+      client: String(b.client ?? "").trim() || null,
+      po_number: String(b.po_number ?? "").trim() || null,
+      comm_pct: pctRaw === "" ? null : parseMoney(pctRaw),
+      stage: COMM_STAGES.includes(String(b.stage) as any) ? (String(b.stage) as any) : "quote",
+    });
+    return c.redirect(`/app/accounts/commissions?open=${id}&saved=1`);
+  }
+  return c.redirect("/app/accounts/commissions");
+});
+
+app.post("/app/accounts/commissions/stage", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id && COMM_STAGES.includes(String(b.stage) as any)) {
+    await setCommissionStage(c.env.DB, String(b.id), String(b.stage));
+  }
+  return c.redirect("/app/accounts/commissions");
+});
+
+app.post("/app/accounts/commissions/delete", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await deleteCommission(c.env.DB, String(b.id));
+  return c.redirect("/app/accounts/commissions");
+});
+
+app.post("/app/accounts/commissions/line/add", async (c) => {
+  const b = await c.req.parseBody();
+  const dealId = String(b.deal ?? "");
+  if (dealId) {
+    await addLine(c.env.DB, {
+      commission_id: dealId,
+      tx_date: parseDateInput(String(b.tx_date)),
+      reference: String(b.reference ?? "").trim() || null,
+      tx_type: String(b.tx_type ?? "").trim() || null,
+      allocation: String(b.allocation ?? "").trim() || null,
+      po_number: String(b.po_number ?? "").trim() || null,
+      description: String(b.description ?? "").trim() || null,
+      payment: b.payment ? parseMoney(String(b.payment)) : 0,
+      invoice: b.invoice ? parseMoney(String(b.invoice)) : 0,
+    });
+  }
+  return c.redirect(`/app/accounts/commissions?open=${dealId}&saved=1`);
+});
+
+app.post("/app/accounts/commissions/line/delete", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await deleteLine(c.env.DB, String(b.id));
+  return c.redirect(`/app/accounts/commissions${b.deal ? `?open=${b.deal}` : ""}`);
+});
+
+app.get("/app/accounts/commissions/export.csv", async (c) => {
+  const [deals, lines] = await Promise.all([listCommissions(c.env.DB), listAllLines(c.env.DB)]);
+  const byId = new Map(deals.map((d) => [d.id, d]));
+  const head = ["Deal", "Staff", "Client", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
+  const out = [head.join(",")];
+  for (const l of lines) {
+    const d = byId.get(l.commission_id);
+    out.push([
+      csv(d?.allocation ?? ""), csv(d?.staff ?? ""), csv(d?.client ?? ""), d?.stage ?? "",
+      l.tx_date ? formatDMY(l.tx_date) : "", csv(l.reference ?? ""), csv(l.tx_type ?? ""), csv(l.allocation ?? ""),
+      csv(l.po_number ?? ""), csv(l.description ?? ""),
+      l.payment ? l.payment.toFixed(2) : "", l.invoice ? l.invoice.toFixed(2) : "",
+    ].join(","));
+  }
+  return csvResponse(c, "commissions.csv", out.join("\n"));
 });
 
 // ----- Monthly expense log -----
