@@ -29,7 +29,7 @@ import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualIt
 import { IncomePage, type ExpenseBucket } from "./views/income";
 import { CashflowDerivedPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
-import { listCommissions, createCommission, setCommissionStage, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES } from "./data/commissions";
+import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
@@ -1096,16 +1096,19 @@ app.get("/app/accounts/income", async (c) => {
  */
 async function ensureCommissionRefColumns(db: D1Database): Promise<void> {
   try {
-    await db.prepare("SELECT quote_no FROM commissions LIMIT 1").first();
+    await db.prepare("SELECT quote_no, invoice_nett FROM commissions LIMIT 1").first();
   } catch {
-    for (const col of ["quote_no TEXT", "invoice_no TEXT", "deal_date TEXT"]) {
+    for (const col of ["quote_no TEXT", "invoice_no TEXT", "deal_date TEXT", "invoice_nett REAL", "comm_amount REAL"]) {
       await db.prepare(`ALTER TABLE commissions ADD COLUMN ${col}`).run().catch(() => {});
     }
-    await db.prepare("UPDATE app_meta SET value='15' WHERE key='schema_version'").run().catch(() => {});
-    await db
-      .prepare("INSERT INTO d1_migrations (name, applied_at) SELECT '0015_commission_refs.sql', datetime('now') WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = '0015_commission_refs.sql')")
-      .run()
-      .catch(() => {});
+    await db.prepare("UPDATE app_meta SET value='16' WHERE key='schema_version'").run().catch(() => {});
+    for (const m of ["0015_commission_refs.sql", "0016_commission_amounts.sql"]) {
+      await db
+        .prepare("INSERT INTO d1_migrations (name, applied_at) SELECT ?, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = ?)")
+        .bind(m, m)
+        .run()
+        .catch(() => {});
+    }
   }
 }
 
@@ -1143,8 +1146,19 @@ app.post("/app/accounts/commissions/add", async (c) => {
       quote_no: String(b.quote_no ?? "").trim() || null,
       invoice_no: String(b.invoice_no ?? "").trim() || null,
       deal_date: parseDateInput(String(b.deal_date)),
+      invoice_nett: String(b.invoice_nett ?? "").trim() ? parseMoney(String(b.invoice_nett)) : null,
+      comm_amount: String(b.comm_amount ?? "").trim() ? parseMoney(String(b.comm_amount)) : null,
     });
     return c.redirect(`/app/accounts/commissions?open=${id}&saved=1`);
+  }
+  return c.redirect("/app/accounts/commissions");
+});
+
+app.post("/app/accounts/commissions/amounts", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) {
+    const num = (v: unknown) => (String(v ?? "").trim() === "" ? null : parseMoney(String(v)));
+    await setCommissionAmounts(c.env.DB, String(b.id), num(b.invoice_nett), num(b.comm_amount), num(b.comm_pct));
   }
   return c.redirect("/app/accounts/commissions");
 });
@@ -1191,12 +1205,13 @@ app.post("/app/accounts/commissions/line/delete", async (c) => {
 app.get("/app/accounts/commissions/export.csv", async (c) => {
   const [deals, lines] = await Promise.all([listCommissions(c.env.DB), listAllLines(c.env.DB)]);
   const byId = new Map(deals.map((d) => [d.id, d]));
-  const head = ["Deal", "Deal Date", "Staff", "Client", "Quote #", "Invoice #", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
+  const head = ["Deal", "Deal Date", "Staff", "Client", "Quote #", "Invoice #", "Invoice Nett", "Comm %", "Commission", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
   const out = [head.join(",")];
   for (const l of lines) {
     const d = byId.get(l.commission_id);
     out.push([
-      csv(d?.allocation ?? ""), d?.deal_date ? formatDMY(d.deal_date) : "", csv(d?.staff ?? ""), csv(d?.client ?? ""), csv(d?.quote_no ?? ""), csv(d?.invoice_no ?? ""), d?.stage ?? "",
+      csv(d?.allocation ?? ""), d?.deal_date ? formatDMY(d.deal_date) : "", csv(d?.staff ?? ""), csv(d?.client ?? ""), csv(d?.quote_no ?? ""), csv(d?.invoice_no ?? ""),
+      d?.invoice_nett != null ? d.invoice_nett.toFixed(2) : "", d?.comm_pct != null ? String(d.comm_pct) : "", (() => { const v = d ? commissionOf(d) : null; return v != null ? v.toFixed(2) : ""; })(), d?.stage ?? "",
       l.tx_date ? formatDMY(l.tx_date) : "", csv(l.reference ?? ""), csv(l.tx_type ?? ""), csv(l.allocation ?? ""),
       csv(l.po_number ?? ""), csv(l.description ?? ""),
       l.payment ? l.payment.toFixed(2) : "", l.invoice ? l.invoice.toFixed(2) : "",

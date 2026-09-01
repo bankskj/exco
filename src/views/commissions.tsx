@@ -1,6 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
-import { type Commission, type CommissionLine, COMM_STAGES, STAGE_LABEL, TX_TYPES } from "../data/commissions";
+import { type Commission, type CommissionLine, COMM_STAGES, STAGE_LABEL, TX_TYPES, commissionOf } from "../data/commissions";
 import { formatZAR } from "../lib/money";
 import { formatDMY } from "../lib/period";
 import { AccountsTabs } from "./income";
@@ -31,7 +31,7 @@ export const CommissionsPage: FC<{
     const lines = linesByDeal.get(d.id) ?? [];
     const invoiced = lines.reduce((s, l) => s + l.invoice, 0);
     const paid = lines.reduce((s, l) => s + l.payment, 0);
-    const commEarned = d.comm_pct != null ? (paid * d.comm_pct) / 100 : null;
+    const commEarned = commissionOf(d);
     return { invoiced, paid, commEarned };
   };
   const all = deals.map((d) => ({ d, t: totalsOf(d) }));
@@ -62,7 +62,7 @@ export const CommissionsPage: FC<{
         <div class="kpis section-block">
           <Kpi label="Invoiced (all deals)" value={formatZAR(totInvoiced)} />
           <Kpi label="Paid" value={formatZAR(totPaid)} sub={`${formatZAR(totInvoiced - totPaid)} outstanding`} />
-          <Kpi label="Commission earned" value={formatZAR(totComm)} sub="% deals · on paid value" tone="pos" />
+          <Kpi label="Commission due" value={formatZAR(totComm)} sub="on invoice nett (editable per deal)" tone="pos" />
           <Kpi label="Open deals" value={String(openDeals)} sub={`${deals.length} total`} />
         </div>
 
@@ -85,7 +85,7 @@ export const CommissionsPage: FC<{
                 <tr>
                   <th style="text-align:left">Allocation</th><th>Date</th><th>Staff</th><th>Client</th>
                   <th>Quote #</th><th>PO #</th><th>Invoice #</th>
-                  <th>Stage</th><th>Invoiced</th><th>Paid</th><th>Comm %</th><th>Comm earned</th><th></th>
+                  <th>Stage</th><th>Invoiced</th><th>Paid</th><th>Invoice nett</th><th>Comm %</th><th>Commission</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -113,8 +113,26 @@ export const CommissionsPage: FC<{
                     </td>
                     <td class="num">{formatZAR(t.invoiced)}</td>
                     <td class="num">{formatZAR(t.paid)}</td>
-                    <td class="num">{d.comm_pct != null ? `${d.comm_pct}%` : "—"}</td>
-                    <td class="num pos">{t.commEarned != null ? formatZAR(t.commEarned) : "—"}</td>
+                    <td>
+                      <form method="post" action="/app/accounts/commissions/amounts" id={`amt-${d.id}`} style="margin:0">
+                        <input type="hidden" name="id" value={d.id} />
+                        <input type="text" inputmode="decimal" name="invoice_nett" value={d.invoice_nett != null ? String(d.invoice_nett) : ""}
+                          placeholder="nett" onchange="this.form.submit()" style="width:90px;text-align:right" />
+                      </form>
+                    </td>
+                    <td>
+                      <input form={`amt-${d.id}`} type="text" inputmode="decimal" name="comm_pct"
+                        value={d.comm_pct != null ? String(d.comm_pct) : ""} placeholder="%" onchange="this.form.submit()"
+                        style="width:52px;text-align:right;padding:6px" />
+                    </td>
+                    <td>
+                      <input form={`amt-${d.id}`} type="text" inputmode="decimal" name="comm_amount"
+                        value={d.comm_amount != null ? String(d.comm_amount) : ""}
+                        placeholder={t.commEarned != null ? String(Math.round(t.commEarned * 100) / 100) : "auto"}
+                        onchange="this.form.submit()"
+                        title={d.comm_amount != null ? "Manually set — clear to return to % × nett" : "Auto: % × invoice nett — type to override"}
+                        style="width:90px;text-align:right" />
+                    </td>
                     <td>
                       <form method="post" action="/app/accounts/commissions/delete" style="margin:0"
                         onsubmit="return confirm('Delete this deal and its ledger?')">
@@ -125,7 +143,7 @@ export const CommissionsPage: FC<{
                   </tr>
                   {openId === d.id ? (
                     <tr>
-                      <td colspan={13} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={14} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <DealLedger deal={d} lines={linesByDeal.get(d.id) ?? []} />
                       </td>
                     </tr>
@@ -150,7 +168,9 @@ export const CommissionsPage: FC<{
             <div><label>Invoice #</label><input type="text" name="invoice_no" placeholder="e.g. INV-00055" /></div>
             <div><label>Client</label><input type="text" name="client" placeholder="e.g. Illovo" /></div>
             <div><label>PO #</label><input type="text" name="po_number" placeholder="e.g. 4500302389" /></div>
+            <div><label>Invoice nett (R) — comm base</label><input type="text" inputmode="decimal" name="invoice_nett" placeholder="e.g. 7 245.00" /></div>
             <div><label>Commission %</label><input type="text" inputmode="decimal" name="comm_pct" placeholder="e.g. 10" /></div>
+            <div><label>Commission amount (R)</label><input type="text" inputmode="decimal" name="comm_amount" placeholder="blank = % × nett" /></div>
             <div><label>Stage</label>
               <select name="stage">{COMM_STAGES.map((s) => <option value={s}>{STAGE_LABEL[s]}</option>)}</select>
             </div>
