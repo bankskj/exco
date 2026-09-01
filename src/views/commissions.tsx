@@ -45,17 +45,17 @@ export const CommissionsPage: FC<{
   for (const { d, t } of all) if (t.commEarned) byStaff.set(d.staff, (byStaff.get(d.staff) ?? 0) + t.commEarned);
 
   return (
-    <Layout title="Commissions" authed section="accounts" wide>
+    <Layout title="Deals" authed section="accounts" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <h1 style="margin-top:12px">Accounts · Commissions</h1>
-            <p class="muted" style="margin-top:0">Track commission deals through Quote → PO → Invoice → Paid, with a full transaction ledger per deal.</p>
+            <h1 style="margin-top:12px">Accounts · Deals</h1>
+            <p class="muted" style="margin-top:0">Track every deal from Quote → PO → Invoice → Paid with a full transaction ledger — commission optional per deal.</p>
           </div>
-          <a class="btn btn-sm" href="/app/accounts/commissions/export.csv">⬇ Export CSV</a>
+          <a class="btn btn-sm" href="/app/accounts/deals/export.csv">⬇ Export CSV</a>
         </div>
 
-        <AccountsTabs active="commissions" />
+        <AccountsTabs active="deals" />
 
         {saved ? <div class="callout section-block">✓ Saved.</div> : null}
 
@@ -93,7 +93,7 @@ export const CommissionsPage: FC<{
                   <>
                   <tr style={openId === d.id ? "background:rgba(79,140,255,.08)" : ""}>
                     <td style="text-align:left">
-                      <a href={openId === d.id ? "/app/accounts/commissions" : `/app/accounts/commissions?open=${d.id}`} style="font-weight:600">
+                      <a href={openId === d.id ? "/app/accounts/deals" : `/app/accounts/deals?open=${d.id}`} style="font-weight:600">
                         {d.allocation} <span class="muted" style="font-size:10px">{openId === d.id ? "▲" : "▼"}</span>
                       </a>
                     </td>
@@ -104,7 +104,7 @@ export const CommissionsPage: FC<{
                     <td class="muted">{d.po_number || "—"}</td>
                     <td class="muted">{d.invoice_no || "—"}</td>
                     <td>
-                      <form method="post" action="/app/accounts/commissions/stage" style="margin:0">
+                      <form method="post" action="/app/accounts/deals/stage" style="margin:0">
                         <input type="hidden" name="id" value={d.id} />
                         <select name="stage" onchange="this.form.submit()" style="padding:4px 8px;font-size:12px;width:auto">
                           {COMM_STAGES.map((s) => <option value={s} selected={d.stage === s}>{STAGE_LABEL[s]}</option>)}
@@ -114,7 +114,7 @@ export const CommissionsPage: FC<{
                     <td class="num">{formatZAR(t.invoiced)}</td>
                     <td class="num">{formatZAR(t.paid)}</td>
                     <td>
-                      <form method="post" action="/app/accounts/commissions/amounts" id={`amt-${d.id}`} style="margin:0">
+                      <form method="post" action="/app/accounts/deals/amounts" id={`amt-${d.id}`} style="margin:0">
                         <input type="hidden" name="id" value={d.id} />
                         <input type="text" inputmode="decimal" name="invoice_nett" value={d.invoice_nett != null ? String(d.invoice_nett) : ""}
                           placeholder="nett" onchange="this.form.submit()" style="width:90px;text-align:right" />
@@ -134,7 +134,7 @@ export const CommissionsPage: FC<{
                         style="width:90px;text-align:right" />
                     </td>
                     <td>
-                      <form method="post" action="/app/accounts/commissions/delete" style="margin:0"
+                      <form method="post" action="/app/accounts/deals/delete" style="margin:0"
                         onsubmit="return confirm('Delete this deal and its ledger?')">
                         <input type="hidden" name="id" value={d.id} />
                         <button class="btn btn-sm btn-danger" type="submit">✕</button>
@@ -157,7 +157,7 @@ export const CommissionsPage: FC<{
 
         <div class="card section-block">
           <h3>New deal</h3>
-          <form method="post" action="/app/accounts/commissions/add" class="formgrid">
+          <form method="post" action="/app/accounts/deals/add" class="formgrid">
             <div><label>Staff (earner)</label>
               <input type="text" name="staff" required list="staffnames" />
               <datalist id="staffnames">{staffNames.map((n) => <option value={n} />)}</datalist>
@@ -211,7 +211,7 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
               <td style="padding:3px 12px 3px 0;text-align:right;font-variant-numeric:tabular-nums">{l.payment ? formatZAR(l.payment) : ""}</td>
               <td style="padding:3px 12px 3px 0;text-align:right;font-variant-numeric:tabular-nums">{l.invoice ? formatZAR(l.invoice) : ""}</td>
               <td style="padding:3px 0">
-                <form method="post" action="/app/accounts/commissions/line/delete" style="margin:0">
+                <form method="post" action="/app/accounts/deals/line/delete" style="margin:0">
                   <input type="hidden" name="id" value={l.id} />
                   <input type="hidden" name="deal" value={deal.id} />
                   <button class="btn btn-sm btn-danger" type="submit">✕</button>
@@ -221,7 +221,7 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
           ))}
         </tbody>
       </table>
-      <form method="post" action="/app/accounts/commissions/line/add" class="formgrid" style="margin-top:14px">
+      <form method="post" action="/app/accounts/deals/line/add" class="formgrid" style="margin-top:14px">
         <input type="hidden" name="deal" value={deal.id} />
         <div><label>Date (dd/mm/yyyy)</label><input type="text" name="tx_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
         <div><label>Reference</label><input type="text" name="reference" /></div>

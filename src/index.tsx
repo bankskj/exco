@@ -1086,7 +1086,9 @@ app.get("/app/accounts/income", async (c) => {
   return c.html(<IncomePage fy={fy} fys={fys} pnl={pnl} prior={prior} buckets={buckets} error={error} />);
 });
 
-// ----- Commissions -----
+// ----- Deals (né Commissions) -----
+
+app.get("/app/accounts/commissions", (c) => c.redirect("/app/accounts/deals"));
 
 /**
  * Self-migration fallback: Cloudflare's D1 HTTP API (used by wrangler
@@ -1112,7 +1114,7 @@ async function ensureCommissionRefColumns(db: D1Database): Promise<void> {
   }
 }
 
-app.get("/app/accounts/commissions", async (c) => {
+app.get("/app/accounts/deals", async (c) => {
   await ensureCommissionRefColumns(c.env.DB);
   const [deals, lines, employees] = await Promise.all([
     listCommissions(c.env.DB),
@@ -1130,7 +1132,7 @@ app.get("/app/accounts/commissions", async (c) => {
   );
 });
 
-app.post("/app/accounts/commissions/add", async (c) => {
+app.post("/app/accounts/deals/add", async (c) => {
   const b = await c.req.parseBody();
   const staff = String(b.staff ?? "").trim();
   const allocation = String(b.allocation ?? "").trim();
@@ -1149,35 +1151,35 @@ app.post("/app/accounts/commissions/add", async (c) => {
       invoice_nett: String(b.invoice_nett ?? "").trim() ? parseMoney(String(b.invoice_nett)) : null,
       comm_amount: String(b.comm_amount ?? "").trim() ? parseMoney(String(b.comm_amount)) : null,
     });
-    return c.redirect(`/app/accounts/commissions?open=${id}&saved=1`);
+    return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
   }
-  return c.redirect("/app/accounts/commissions");
+  return c.redirect("/app/accounts/deals");
 });
 
-app.post("/app/accounts/commissions/amounts", async (c) => {
+app.post("/app/accounts/deals/amounts", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) {
     const num = (v: unknown) => (String(v ?? "").trim() === "" ? null : parseMoney(String(v)));
     await setCommissionAmounts(c.env.DB, String(b.id), num(b.invoice_nett), num(b.comm_amount), num(b.comm_pct));
   }
-  return c.redirect("/app/accounts/commissions");
+  return c.redirect("/app/accounts/deals");
 });
 
-app.post("/app/accounts/commissions/stage", async (c) => {
+app.post("/app/accounts/deals/stage", async (c) => {
   const b = await c.req.parseBody();
   if (b.id && COMM_STAGES.includes(String(b.stage) as any)) {
     await setCommissionStage(c.env.DB, String(b.id), String(b.stage));
   }
-  return c.redirect("/app/accounts/commissions");
+  return c.redirect("/app/accounts/deals");
 });
 
-app.post("/app/accounts/commissions/delete", async (c) => {
+app.post("/app/accounts/deals/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteCommission(c.env.DB, String(b.id));
-  return c.redirect("/app/accounts/commissions");
+  return c.redirect("/app/accounts/deals");
 });
 
-app.post("/app/accounts/commissions/line/add", async (c) => {
+app.post("/app/accounts/deals/line/add", async (c) => {
   const b = await c.req.parseBody();
   const dealId = String(b.deal ?? "");
   if (dealId) {
@@ -1193,16 +1195,16 @@ app.post("/app/accounts/commissions/line/add", async (c) => {
       invoice: b.invoice ? parseMoney(String(b.invoice)) : 0,
     });
   }
-  return c.redirect(`/app/accounts/commissions?open=${dealId}&saved=1`);
+  return c.redirect(`/app/accounts/deals?open=${dealId}&saved=1`);
 });
 
-app.post("/app/accounts/commissions/line/delete", async (c) => {
+app.post("/app/accounts/deals/line/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteLine(c.env.DB, String(b.id));
-  return c.redirect(`/app/accounts/commissions${b.deal ? `?open=${b.deal}` : ""}`);
+  return c.redirect(`/app/accounts/deals${b.deal ? `?open=${b.deal}` : ""}`);
 });
 
-app.get("/app/accounts/commissions/export.csv", async (c) => {
+app.get("/app/accounts/deals/export.csv", async (c) => {
   const [deals, lines] = await Promise.all([listCommissions(c.env.DB), listAllLines(c.env.DB)]);
   const byId = new Map(deals.map((d) => [d.id, d]));
   const head = ["Deal", "Deal Date", "Staff", "Client", "Quote #", "Invoice #", "Invoice Nett", "Comm %", "Commission", "Stage", "Date", "Reference", "Transaction Type", "Allocation", "PO", "Description", "Payments", "Invoices"];
@@ -1217,7 +1219,7 @@ app.get("/app/accounts/commissions/export.csv", async (c) => {
       l.payment ? l.payment.toFixed(2) : "", l.invoice ? l.invoice.toFixed(2) : "",
     ].join(","));
   }
-  return csvResponse(c, "commissions.csv", out.join("\n"));
+  return csvResponse(c, "deals.csv", out.join("\n"));
 });
 
 // ----- Monthly expense log -----
