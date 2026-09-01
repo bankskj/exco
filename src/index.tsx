@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import type { AppEnv, Bindings } from "./types";
 import { checkPassword, startSession, endSession, isAuthed, requireAuth } from "./auth";
-import { Landing, Login, Dashboard } from "./views/pages";
+import { Landing, Login } from "./views/pages";
+import { Dashboard, type DashStats } from "./views/dashboard";
 import { HrDashboard, HrEmployeePage, tenure } from "./views/hr";
 import {
   listHrEmployees,
@@ -110,7 +111,81 @@ app.get("/healthz", (c) => c.json({ ok: true }));
 app.use("/app", requireAuth);
 app.use("/app/*", requireAuth);
 
-app.get("/app", (c) => c.html(<Dashboard />));
+app.get("/app", async (c) => {
+  const [derived, hrEmployees, hrWarnings, deals, dealLines, payrollEmployees2, payrollEntries2] = await Promise.all([
+    loadDerived(c.env, "cash"),
+    listHrEmployees(c.env.DB),
+    warningCounts(c.env.DB),
+    listCommissions(c.env.DB),
+    listAllLines(c.env.DB),
+    listEmployees(c.env.DB),
+    listPayrollEntries(c.env.DB),
+  ]);
+  const now = new Date();
+  const nowMonth = now.toISOString().slice(0, 7);
+
+  // Income FYTD (accrual, from the synced P&L store)
+  const fy = fiscalYearOf(nowMonth);
+  const fyStart = `${fy - 1}-03`;
+  let inc = 0;
+  let exp = 0;
+  const actualsMap = await listCfActuals(c.env.DB);
+  for (const [m, a] of actualsMap) {
+    if (m >= fyStart && m <= nowMonth) {
+      inc += a.income_accr;
+      exp += a.staff_accr + a.dev_accr + a.other_accr;
+    }
+  }
+  const net = inc - exp;
+
+  // Deals
+  const linesByDeal = new Map<string, number>();
+  for (const l of dealLines) linesByDeal.set(l.commission_id, (linesByDeal.get(l.commission_id) ?? 0) + l.invoice);
+  const dealValue = (d: (typeof deals)[number]) => d.invoice_nett ?? linesByDeal.get(d.id) ?? 0;
+  const quotedDeals = deals.filter((d) => d.stage === "quote");
+  const invoicedValue = deals.filter((d) => d.stage === "invoice").reduce((s2, d) => s2 + dealValue(d), 0);
+  const commDue = deals.reduce((s2, d) => s2 + (commissionOf(d) ?? 0), 0);
+
+  // Payroll latest month
+  const periods = [...new Set(payrollEntries2.map((p) => p.period))].sort();
+  const latest = periods.length ? periods[periods.length - 1] : null;
+  let pGross = 0;
+  let pPaye = 0;
+  let pPaid = 0;
+  if (latest) {
+    for (const pe of payrollEntries2) {
+      if (pe.period !== latest || pe.gross <= 0) continue;
+      pGross += pe.gross;
+      pPaye += pe.paye;
+      pPaid++;
+    }
+  }
+
+  // HR
+  const hrActive = hrEmployees.filter((e) => !e.end_date);
+  const avgM = hrActive.length ? hrActive.reduce((s2, e) => s2 + tenure(e, now).months, 0) / hrActive.length : 0;
+  const totalWarnings = [...hrWarnings.values()].reduce((a, b) => a + b, 0);
+
+  // Expenses
+  const allExp = await listExpenses(c.env.DB);
+  const recurringMonthly = allExp.filter((e) => e.active).reduce((s2, e) => s2 + monthlyEquivalent(e), 0);
+
+  const stats: DashStats = {
+    cash: {
+      bankToday: derived.position.bankToday,
+      runwayMonths: derived.cf.kpis.runwayMonths,
+      runwayMonth: derived.cf.kpis.runwayMonth,
+      netPosition: derived.position.bankToday + derived.position.debtorsDue - derived.position.revolving,
+      anchored: true,
+    },
+    income: { fyLabel: fyLabel(fy), income: inc, net, nim: inc ? Math.round((net / inc) * 1000) / 10 : 0 },
+    deals: { quoted: quotedDeals.reduce((s2, d) => s2 + dealValue(d), 0), quotedN: quotedDeals.length, invoiced: invoicedValue, commDue },
+    payroll: { month: latest, nett: pGross - pPaye, gross: pGross, paid: pPaid },
+    expenses: { recurringMonthly, activeN: allExp.filter((e) => e.active).length, debtorsDue: derived.position.debtorsDue },
+    hr: { active: hrActive.length, avgTenure: `${Math.floor(avgM / 12)}y ${Math.round(avgM % 12)}m`, warnings: totalWarnings },
+  };
+  return c.html(<Dashboard s={stats} />);
+});
 
 // ---------- Payroll ----------
 
