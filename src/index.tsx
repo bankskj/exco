@@ -1088,7 +1088,29 @@ app.get("/app/accounts/income", async (c) => {
 
 // ----- Commissions -----
 
+/**
+ * Self-migration fallback: Cloudflare's D1 HTTP API (used by wrangler
+ * migrations) can be unavailable while the Worker's binding still works.
+ * Ensure the 0015 columns exist via the data plane, and record the
+ * migration so wrangler doesn't re-apply it later.
+ */
+async function ensureCommissionRefColumns(db: D1Database): Promise<void> {
+  try {
+    await db.prepare("SELECT quote_no FROM commissions LIMIT 1").first();
+  } catch {
+    for (const col of ["quote_no TEXT", "invoice_no TEXT", "deal_date TEXT"]) {
+      await db.prepare(`ALTER TABLE commissions ADD COLUMN ${col}`).run().catch(() => {});
+    }
+    await db.prepare("UPDATE app_meta SET value='15' WHERE key='schema_version'").run().catch(() => {});
+    await db
+      .prepare("INSERT INTO d1_migrations (name, applied_at) SELECT '0015_commission_refs.sql', datetime('now') WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = '0015_commission_refs.sql')")
+      .run()
+      .catch(() => {});
+  }
+}
+
 app.get("/app/accounts/commissions", async (c) => {
+  await ensureCommissionRefColumns(c.env.DB);
   const [deals, lines, employees] = await Promise.all([
     listCommissions(c.env.DB),
     listAllLines(c.env.DB),
