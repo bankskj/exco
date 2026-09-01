@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "./layout";
+import { Layout, DateField } from "./layout";
 import { type RecurringExpense, type VendorBill, type BillingPattern, FREQUENCIES, monthlyEquivalent } from "../data/expenses";
 import type { XeroState } from "../lib/xero";
 import { formatZAR } from "../lib/money";
@@ -220,7 +220,7 @@ export const ExpensesPage: FC<{
                     {FREQUENCIES.map((f) => <option value={f.key} selected={f.key === "monthly"}>{f.label}</option>)}
                   </select>
                 </div>
-                <div><label>Next date (dd/mm/yyyy)</label><input type="text" name="next_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
+                <div><label>Next date</label><DateField name="next_date" /></div>
                 <div class="full"><label>Notes</label><input type="text" name="notes" /></div>
                 <div><button class="btn btn-primary" type="submit">Add expense</button></div>
               </form>

@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "./layout";
+import { Layout, DateField } from "./layout";
 import { type HrEmployee, type HrNote, type HrDocument, type NoteKind, NOTE_KINDS, KIND_LABEL } from "../data/hr";
 import { hBars } from "../lib/charts";
 import { formatDMY } from "../lib/period";
@@ -130,7 +130,7 @@ export const HrDashboard: FC<{
             <div><label>Position</label><input type="text" name="position" /></div>
             <div><label>Team</label><input type="text" name="team" /></div>
             <div><label>Manager</label><input type="text" name="manager" /></div>
-            <div><label>Start date (dd/mm/yyyy)</label><input type="text" name="start_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
+            <div><label>Start date</label><DateField name="start_date" /></div>
             <div><button class="btn btn-primary" type="submit">Add</button></div>
           </form>
         </div>
@@ -201,8 +201,8 @@ export const HrEmployeePage: FC<{
                 <div><label>Position</label><input type="text" name="position" value={emp.position ?? ""} /></div>
                 <div><label>Team</label><input type="text" name="team" value={emp.team ?? ""} /></div>
                 <div><label>Manager</label><input type="text" name="manager" value={emp.manager ?? ""} /></div>
-                <div><label>Start date (dd/mm/yyyy)</label><input type="text" name="start_date" placeholder="dd/mm/yyyy" inputmode="numeric" value={emp.start_date ? formatDMY(emp.start_date) : ""} /></div>
-                <div><label>Last working day (dd/mm/yyyy, blank = active)</label><input type="text" name="end_date" placeholder="dd/mm/yyyy" inputmode="numeric" value={emp.end_date ? formatDMY(emp.end_date) : ""} /></div>
+                <div><label>Start date</label><DateField name="start_date" value={emp.start_date ? formatDMY(emp.start_date) : ""} /></div>
+                <div><label>Last working day (blank = active)</label><DateField name="end_date" value={emp.end_date ? formatDMY(emp.end_date) : ""} /></div>
                 <div><button class="btn btn-primary" type="submit">Save details</button></div>
               </form>
             </div>
@@ -220,7 +220,7 @@ export const HrEmployeePage: FC<{
                         .map((k) => <option value={k} selected={k === "note"}>{KIND_LABEL[k]}</option>)}
                     </select>
                   </div>
-                  <div><label>Date (dd/mm/yyyy)</label><input type="text" name="note_date" placeholder="dd/mm/yyyy" inputmode="numeric" value={formatDMY(now.toISOString().slice(0, 10))} /></div>
+                  <div><label>Date</label><DateField name="note_date" value={formatDMY(now.toISOString().slice(0, 10))} /></div>
                   <div class="full"><label>Title</label><input type="text" name="title" required placeholder="e.g. Signed 2026 contract / Exceeded Q2 targets / Late delivery discussion" /></div>
                   <div class="full"><label>Details</label><textarea name="body" rows={3}></textarea></div>
                   <div class="full"><label>Attachments (documents / images)</label><input type="file" name="files" multiple style="font-size:13px" /></div>

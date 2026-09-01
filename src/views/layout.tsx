@@ -141,6 +141,12 @@ input[type=number], select { width: 100%; padding: 10px 12px; border-radius: 10p
 .section-block { margin-top: 26px; }
 a.subnav { margin-right: 14px; font-weight: 600; }
 
+/* Date field with native picker trigger */
+.datewrap { position: relative; }
+.datewrap input[type=text] { padding-right: 36px; }
+.datewrap .dp { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; opacity: 0; cursor: pointer; padding: 0; border: 0; }
+.datewrap .dpicon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 14px; opacity: .75; }
+
 /* Segmented control (Report / Capture) */
 .segmented { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 4px; }
 .seg { padding: 7px 18px; border-radius: 7px; font-weight: 600; font-size: 14px; color: var(--muted); }
@@ -193,3 +199,16 @@ export const Layout: FC<
 );
 
 const WIDE_CSS = `.container { max-width: 1320px; }`;
+
+/**
+ * dd/mm/yyyy text field with a native calendar picker: the invisible date
+ * input sits over the icon; picking a date writes it back as dd/mm/yyyy.
+ */
+export const DateField: FC<{ name: string; value?: string }> = ({ name, value }) => (
+  <div class="datewrap">
+    <input type="text" name={name} value={value ?? ""} placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" />
+    <input type="date" class="dp" tabindex={-1}
+      onchange="var t=this.parentElement.querySelector('input[type=text]');if(this.value){var p=this.value.split('-');t.value=p[2]+'/'+p[1]+'/'+p[0];}" />
+    <span class="dpicon">📅</span>
+  </div>
+);

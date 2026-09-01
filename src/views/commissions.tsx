@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "./layout";
+import { Layout, DateField } from "./layout";
 import { type Commission, type CommissionLine, COMM_STAGES, STAGE_LABEL, TX_TYPES, commissionOf } from "../data/commissions";
 import { formatZAR } from "../lib/money";
 import { formatDMY } from "../lib/period";
@@ -163,7 +163,7 @@ export const CommissionsPage: FC<{
               <datalist id="staffnames">{staffNames.map((n) => <option value={n} />)}</datalist>
             </div>
             <div><label>Allocation</label><input type="text" name="allocation" required placeholder="e.g. SAP Analyst - Bonus" /></div>
-            <div><label>Date (dd/mm/yyyy)</label><input type="text" name="deal_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
+            <div><label>Date</label><DateField name="deal_date" /></div>
             <div><label>Quote #</label><input type="text" name="quote_no" placeholder="e.g. QU-0012" /></div>
             <div><label>Invoice #</label><input type="text" name="invoice_no" placeholder="e.g. INV-00055" /></div>
             <div><label>Client</label><input type="text" name="client" placeholder="e.g. Illovo" /></div>
@@ -223,7 +223,7 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
       </table>
       <form method="post" action="/app/accounts/deals/line/add" class="formgrid" style="margin-top:14px">
         <input type="hidden" name="deal" value={deal.id} />
-        <div><label>Date (dd/mm/yyyy)</label><input type="text" name="tx_date" placeholder="dd/mm/yyyy" inputmode="numeric" /></div>
+        <div><label>Date</label><DateField name="tx_date" /></div>
         <div><label>Reference</label><input type="text" name="reference" /></div>
         <div><label>Transaction type</label>
           <select name="tx_type">{TX_TYPES.map((t) => <option value={t}>{t}</option>)}</select>
