@@ -1127,8 +1127,9 @@ app.get("/app/accounts/deals", async (c) => {
     linesByDeal.get(l.commission_id)!.push(l);
   }
   const openId = c.req.query("open") ?? null;
+  const clientFilter = c.req.query("client")?.trim() || null;
   return c.html(
-    <CommissionsPage deals={deals} linesByDeal={linesByDeal} staffNames={employees.map((e) => e.name)} openId={openId} saved={c.req.query("saved") === "1"} />,
+    <CommissionsPage deals={deals} linesByDeal={linesByDeal} staffNames={employees.map((e) => e.name)} openId={openId} clientFilter={clientFilter} saved={c.req.query("saved") === "1"} />,
   );
 });
 

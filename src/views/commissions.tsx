@@ -25,8 +25,9 @@ export const CommissionsPage: FC<{
   linesByDeal: Map<string, CommissionLine[]>;
   staffNames: string[];
   openId: string | null;
+  clientFilter: string | null;
   saved?: boolean;
-}> = ({ deals, linesByDeal, staffNames, openId, saved }) => {
+}> = ({ deals, linesByDeal, staffNames, openId, clientFilter, saved }) => {
   const totalsOf = (d: Commission): CommTotals => {
     const lines = linesByDeal.get(d.id) ?? [];
     const invoiced = lines.reduce((s, l) => s + l.invoice, 0);
@@ -34,11 +35,31 @@ export const CommissionsPage: FC<{
     const commEarned = commissionOf(d);
     return { invoiced, paid, commEarned };
   };
-  const all = deals.map((d) => ({ d, t: totalsOf(d) }));
+  // Deal value: invoice nett where captured, else the ledger's invoiced total.
+  const valueOf = (d: Commission): number => d.invoice_nett ?? (linesByDeal.get(d.id) ?? []).reduce((s, l) => s + l.invoice, 0);
+  const visibleDeals = clientFilter ? deals.filter((d) => (d.client ?? "") === clientFilter) : deals;
+  const all = visibleDeals.map((d) => ({ d, t: totalsOf(d) }));
   const totInvoiced = all.reduce((s, x) => s + x.t.invoiced, 0);
   const totPaid = all.reduce((s, x) => s + x.t.paid, 0);
   const totComm = all.reduce((s, x) => s + (x.t.commEarned ?? 0), 0);
-  const openDeals = deals.filter((d) => d.stage !== "paid").length;
+  const openDeals = visibleDeals.filter((d) => d.stage !== "paid").length;
+  const stageStat = (stage: string) => {
+    const ds = visibleDeals.filter((d) => d.stage === stage);
+    return { n: ds.length, v: ds.reduce((s, d) => s + valueOf(d), 0) };
+  };
+  const stQuote = stageStat("quote");
+  const stPo = stageStat("po");
+  const stInvoice = stageStat("invoice");
+  const stPaid = stageStat("paid");
+  // Client breakdown (always across all deals)
+  const byClient = new Map<string, { n: number; v: number }>();
+  for (const d of deals) {
+    const key = d.client?.trim() || "(no client)";
+    const cur = byClient.get(key) ?? { n: 0, v: 0 };
+    cur.n++;
+    cur.v += valueOf(d);
+    byClient.set(key, cur);
+  }
 
   // Per-staff commission summary
   const byStaff = new Map<string, number>();
@@ -60,10 +81,30 @@ export const CommissionsPage: FC<{
         {saved ? <div class="callout section-block">✓ Saved.</div> : null}
 
         <div class="kpis section-block">
-          <Kpi label="Invoiced (all deals)" value={formatZAR(totInvoiced)} />
-          <Kpi label="Paid" value={formatZAR(totPaid)} sub={`${formatZAR(totInvoiced - totPaid)} outstanding`} />
+          <Kpi label="Quoted value" value={formatZAR(stQuote.v)} sub={`${stQuote.n} deal(s) — what's coming`} />
+          <Kpi label="PO value" value={formatZAR(stPo.v)} sub={`${stPo.n} deal(s) committed`} tone="warn" />
+          <Kpi label="Invoiced value" value={formatZAR(stInvoice.v)} sub={`${stInvoice.n} deal(s) awaiting payment`} />
+          <Kpi label="Paid value" value={formatZAR(stPaid.v)} sub={`${stPaid.n} deal(s) done`} tone="pos" />
+        </div>
+        <div class="kpis section-block">
+          <Kpi label="Ledger invoiced" value={formatZAR(totInvoiced)} sub={`${formatZAR(totInvoiced - totPaid)} outstanding`} />
+          <Kpi label="Ledger paid" value={formatZAR(totPaid)} />
           <Kpi label="Commission due" value={formatZAR(totComm)} sub="on invoice nett (editable per deal)" tone="pos" />
-          <Kpi label="Open deals" value={String(openDeals)} sub={`${deals.length} total`} />
+          <Kpi label="Open deals" value={String(openDeals)} sub={`${visibleDeals.length} shown`} />
+        </div>
+
+        <div class="card section-block">
+          <div class="row spread">
+            <h3 style="margin:0">By client — click to filter</h3>
+            {clientFilter ? <a class="btn btn-sm" href="/app/accounts/deals">✕ Clear filter: {clientFilter}</a> : null}
+          </div>
+          <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
+            {[...byClient.entries()].sort((a, b) => b[1].v - a[1].v).map(([name, st]) => (
+              <a class={`btn btn-sm${clientFilter === name ? " btn-primary" : ""}`} href={clientFilter === name ? "/app/accounts/deals" : `/app/accounts/deals?client=${encodeURIComponent(name)}`}>
+                {name} · {formatZAR(st.v)} <span class="muted">({st.n})</span>
+              </a>
+            ))}
+          </div>
         </div>
 
         {byStaff.size > 0 ? (
