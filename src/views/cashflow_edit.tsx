@@ -3,10 +3,13 @@ import { Layout } from "./layout";
 import type { CFCategory } from "../lib/forecast";
 import type { DerivedCashflow } from "../lib/cashflow_engine";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel } from "../lib/period";
+import { label, shortLabel, fiscalYearOf } from "../lib/period";
 import { AccountsTabs } from "./income";
 
 export type EntryMap = Map<string, Map<string, { amount: number; status: string }>>;
+
+const srcLabel = (s: string): string =>
+  s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll grid" : s === "ctc" ? "payroll CTC" : s === "avg" ? "avg" : "actual";
 
 /**
  * Forecast grid: the derived model's forecast months as editable columns.
@@ -22,15 +25,25 @@ export const ForecastGridPage: FC<{
   boundary: string;
   saved?: boolean;
 }> = ({ cf, overrideCats, adjCats, entries, boundary, saved }) => {
+  // Show the boundary FY's actual months (read-only context) before the editable forecast months.
+  const actualMonths = cf.columns
+    .filter((c) => !c.isForecast && fiscalYearOf(c.month) === fiscalYearOf(boundary))
+    .map((c) => c.month);
   const months = cf.columns.filter((c) => c.isForecast).map((c) => c.month);
+  const allMonths = [...actualMonths, ...months];
   const colByMonth = new Map(cf.columns.map((c) => [c.month, c]));
 
+  const rowKind = (name: string): "income" | "people" | "other" =>
+    /income/i.test(name) ? "income" : /people/i.test(name) ? "people" : "other";
   const modelValue = (name: string, m: string): number => {
     const c = colByMonth.get(m);
-    if (!c) return 0;
-    if (/income/i.test(name)) return c.income;
-    if (/people/i.test(name)) return c.people;
-    return c.other;
+    return c ? c[rowKind(name)] : 0;
+  };
+  const modelSrc = (name: string, m: string): string => {
+    const c = colByMonth.get(m);
+    if (!c) return "avg";
+    const k = rowKind(name);
+    return k === "income" ? c.incomeSrc : k === "people" ? c.peopleSrc : c.otherSrc;
   };
 
   return (
@@ -40,8 +53,9 @@ export const ForecastGridPage: FC<{
           <div>
             <h1 style="margin-top:12px">Accounts · Forecast grid</h1>
             <p class="muted" style="margin-top:0">
-              Fine-tune the months after <strong>{label(boundary)}</strong>. Blank override cells use the model
-              (greyed value); type to overwrite. Additional rows add on top — e.g. outstanding project income.
+              Actuals through <strong>{label(boundary)}</strong> shown for context. Later months are the model's
+              forecast (tag shows the source); type a value to override it. Additional rows add on top — e.g.
+              outstanding project income.
             </p>
           </div>
           <a class="btn btn-sm" href="/app/accounts">← Cashflow dashboard</a>
@@ -53,39 +67,47 @@ export const ForecastGridPage: FC<{
 
         <form method="post" action="/app/accounts/save">
           <div class="tablewrap section-block">
-            <table class="grid fixed" style={`min-width:${240 + months.length * 104}px`}>
+            <table class="grid fixed" style={`min-width:${240 + allMonths.length * 104}px`}>
               <colgroup>
                 <col style="width:240px" />
-                {months.map(() => <col style="width:104px" />)}
+                {allMonths.map(() => <col style="width:104px" />)}
               </colgroup>
               <thead>
                 <tr>
                   <th style="text-align:left">Row</th>
-                  {months.map((m) => <th>{shortLabel(m)}</th>)}
+                  {actualMonths.map((m) => <th class="muted">{shortLabel(m)}</th>)}
+                  {months.map((m) => <th class="fc">{shortLabel(m)}</th>)}
                 </tr>
               </thead>
               <tbody>
-                <tr class="group"><td colspan={months.length + 1}>Overrides — blank = model value</td></tr>
+                <tr class="group"><td colspan={allMonths.length + 1}>Income / People / Other — actuals, then forecast (type to override; blank = model)</td></tr>
                 {overrideCats.map((cat) => (
                   <tr>
-                    <td style="text-align:left">{cat.name} <span class="badge recurring">override</span></td>
+                    <td style="text-align:left">{cat.name}</td>
+                    {actualMonths.map((m) => (
+                      <td class="num muted">
+                        {formatZAR(modelValue(cat.name, m))}<span class="cellhint"> actual</span>
+                      </td>
+                    ))}
                     {months.map((m) => {
                       const v = entries.get(cat.id)?.get(m);
                       return (
                         <td>
                           <input type="text" inputmode="decimal" name={`e_${cat.id}_${m}`}
                             value={v ? String(v.amount) : ""} placeholder={String(Math.round(modelValue(cat.name, m)))} autocomplete="off" />
+                          <span class="cellhint"> {srcLabel(modelSrc(cat.name, m))}</span>
                         </td>
                       );
                     })}
                   </tr>
                 ))}
-                <tr class="group"><td colspan={months.length + 1}>Additional rows — projects, pipeline, once-offs</td></tr>
+                <tr class="group"><td colspan={allMonths.length + 1}>Additional rows — projects, pipeline, once-offs</td></tr>
                 {adjCats.map((cat) => (
                   <tr>
                     <td style="text-align:left">
                       {cat.name} <span class={`badge ${cat.kind}`}>{cat.kind}</span>
                     </td>
+                    {actualMonths.map(() => <td class="muted" style="text-align:center">—</td>)}
                     {months.map((m) => {
                       const v = entries.get(cat.id)?.get(m);
                       return (
@@ -99,14 +121,14 @@ export const ForecastGridPage: FC<{
                 ))}
                 <tr class="total">
                   <td style="text-align:left">Net (model + grid)</td>
-                  {months.map((m) => {
+                  {allMonths.map((m) => {
                     const c = colByMonth.get(m);
                     return <td class={`num ${c && c.net < 0 ? "neg" : ""}`}>{c ? formatZAR(c.net) : ""}</td>;
                   })}
                 </tr>
                 <tr class="total">
                   <td style="text-align:left">Cash balance</td>
-                  {months.map((m) => {
+                  {allMonths.map((m) => {
                     const c = colByMonth.get(m);
                     return <td class={`num ${c && c.balance < 0 ? "neg" : ""}`}>{c ? formatZAR(c.balance) : ""}</td>;
                   })}
