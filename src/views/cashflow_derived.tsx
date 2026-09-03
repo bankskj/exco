@@ -7,6 +7,9 @@ import { label, shortLabel, fiscalYearOf, fyLabel } from "../lib/period";
 import { lineChart, comboBars } from "../lib/charts";
 import { AccountsTabs } from "./income";
 
+const srcLabel = (s: string): string =>
+  s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll grid" : s === "ctc" ? "payroll CTC" : "avg";
+
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
     <div class="k-label">{label}</div>
@@ -42,8 +45,9 @@ export const CashflowDerivedPage: FC<{
             <h1 style="margin-top:12px">Accounts · Cashflow</h1>
             <p class="muted" style="margin-top:0">
               Cash basis — money actually received and paid, the truth for the bank balance. For the P&L view that
-              matches Xero, use the <a href="/app/accounts/income">Income tab</a>. Actuals through <strong>{label(boundary)}</strong>; forecast from the Payroll grid and the average of{" "}
-              {cf.avgBasis.map(label).join(", ") || "—"}.
+              matches Xero, use the <a href="/app/accounts/income">Income tab</a>. Actuals through <strong>{label(boundary)}</strong>. Forecast: people from the Payroll grid (falling back to
+              active-staff CTC); income{cf.growthIncomePct != null ? ` at last year's month ${cf.growthIncomePct >= 0 ? "+" : ""}${cf.growthIncomePct}% YoY` : " from the 3-month average"} and
+              other expenses{cf.growthOtherPct != null ? ` at ${cf.growthOtherPct >= 0 ? "+" : ""}${cf.growthOtherPct}% YoY` : " from the 3-month average"}. Typed grid values show as <em>override</em>.
             </p>
           </div>
           <a class="btn btn-sm" href="/app/accounts/export.csv">⬇ Export CSV</a>
@@ -167,9 +171,9 @@ export const CashflowDerivedPage: FC<{
                 {visible.map((c) => (
                   <tr>
                     <td style="text-align:left">{label(c.month)}</td>
-                    <td class="num">{formatZAR(c.income)}{c.isForecast ? <span class="cellhint"> {c.incomeSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
-                    <td class="num">{formatZAR(c.people)}{c.isForecast ? <span class="cellhint"> {c.peopleSrc === "manual" ? "manual" : c.peopleSrc === "payroll" ? "payroll grid" : "avg"}</span> : null}</td>
-                    <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {c.otherSrc === "manual" ? "manual" : "avg"}</span> : null}</td>
+                    <td class="num">{formatZAR(c.income)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.incomeSrc)}</span> : null}</td>
+                    <td class="num">{formatZAR(c.people)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.peopleSrc)}</span> : null}</td>
+                    <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.otherSrc)}</span> : null}</td>
                     <td class="num">{formatZAR(c.sars)}{c.isForecast ? <span class="cellhint"> avg</span> : null}</td>
                     <td class="num">{formatZAR(c.recurring)}</td>
                     <td class={`num ${c.adjIncome - c.adjCost < 0 ? "neg" : ""}`}>{c.adjIncome || c.adjCost ? formatZAR(c.adjIncome - c.adjCost) : "—"}</td>

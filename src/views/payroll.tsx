@@ -2,7 +2,7 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import { type Employee, type EmployeeType, type PayrollEntry, EMPLOYEE_TYPES, TYPE_LABEL, hasPaye } from "../data/payroll";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel, maxPeriod, fiscalYearOf, fyLabel, fyRangeLabel } from "../lib/period";
+import { label, shortLabel, maxPeriod, fiscalYearOf, fyLabel, fyRangeLabel, formatDMY } from "../lib/period";
 import { lineChart, hBars } from "../lib/charts";
 
 type Triple = { gross: number; paye: number; nett: number };
@@ -318,6 +318,10 @@ export const PayrollCapturePage: FC<{
                       <td><TypeBadge type={e.type} /></td>
                       <td class="muted">{e.mentor || "—"}</td>
                       {gridPeriods.map((p) => {
+                        // Months after an inactive date are closed for capture.
+                        if (e.status === "inactive" && e.inactive_date && p > e.inactive_date.slice(0, 7)) {
+                          return <td class="muted" style="text-align:center" title={`Inactive from ${e.inactive_date}`}>—</td>;
+                        }
                         const c = cellVal(e.id, p);
                         if (metric === "nett") {
                           const nett = c ? c.gross - c.paye : null;
@@ -326,8 +330,11 @@ export const PayrollCapturePage: FC<{
                         if (payeDisabled) return <td class="muted" style="text-align:center">n/a</td>;
                         const v = c ? (metric === "gross" ? c.gross : c.paye) : undefined;
                         const nm = `${metric === "gross" ? "g" : "t"}_${e.id}_${p}`;
-                        // PAYE cells hint the employee default when the month was paid but no PAYE captured.
-                        const hint = metric === "paye" && (!v || v === 0) && c && c.gross > 0 && e.paye_default > 0 ? String(e.paye_default) : "";
+                        // Prefill hints: gross cells show the active employee's CTC;
+                        // PAYE cells show the default where the month was paid.
+                        let hint = "";
+                        if (metric === "gross" && (!v || v === 0) && e.status === "active" && e.ctc) hint = String(e.ctc);
+                        if (metric === "paye" && (!v || v === 0) && c && c.gross > 0 && e.paye_default > 0) hint = String(e.paye_default);
                         return (
                           <td>
                             <input type="text" inputmode="decimal" name={nm} value={v != null && v !== 0 ? String(v) : ""} placeholder={hint} autocomplete="off" />
@@ -423,6 +430,7 @@ const EmployeeManager: FC<{ employees: Employee[] }> = ({ employees }) => (
                   <option value="active" selected={e.status === "active"}>active</option>
                   <option value="inactive" selected={e.status === "inactive"}>inactive</option>
                 </select>
+                {e.status === "inactive" && e.inactive_date ? <div class="cellhint">since {formatDMY(e.inactive_date)}</div> : null}
               </td>
               <td>
                 <form method="post" action="/app/payroll/employee/delete" style="margin:0"

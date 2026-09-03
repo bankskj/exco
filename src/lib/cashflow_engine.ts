@@ -7,11 +7,11 @@
 //                    month (books not reconciled yet) never skews the model.
 // The actuals/forecast boundary is the user's "books complete through" month.
 
-import { addMonths, rangeInclusive, monthsBetween } from "./period";
+import { addMonths, rangeInclusive, monthsBetween, fiscalYearOf } from "./period";
 import type { CfActual } from "../data/cashflow";
 import type { CFSettings } from "./forecast";
 
-export type CfSource = "pnl" | "payroll" | "avg" | "manual";
+export type CfSource = "pnl" | "payroll" | "ctc" | "yoy" | "avg" | "manual";
 
 export type DerivedColumn = {
   month: string;
@@ -58,6 +58,8 @@ export type DerivedCashflow = {
     lowest: { month: string; balance: number };
   };
   avgBasis: string[]; // the actual months used for 3-month averages
+  growthIncomePct: number | null; // YoY growth applied to income forecasts
+  growthOtherPct: number | null; // YoY growth applied to other-expense forecasts
 };
 
 const avg = (vals: number[]): number => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0);
@@ -70,6 +72,7 @@ export function buildDerivedCashflow(
   overrides: CfOverrides = new Map(),
   adjustments: CfAdjustmentRow[] = [],
   sarsByMonth: Map<string, number> = new Map(),
+  activeCtcMonthly = 0, // sum of active employees' CTC — people fallback beyond the grid
 ): DerivedCashflow {
   const start = s.opening_period;
   const boundary = s.actuals_through; // books complete through (inclusive)
@@ -85,6 +88,29 @@ export function buildDerivedCashflow(
   const peopleAvg = avg(basisVals((a) => a.staff + a.dev));
   const otherAvg = avg(basisVals((a) => a.other));
   const sarsAvg = avg(avgBasis.map((m) => sarsByMonth.get(m) ?? 0));
+
+  // Year-on-year growth: complete months of the boundary's FY vs the same
+  // months a year earlier. Applied to last year's same-month actual so the
+  // forecast keeps seasonality. Clamped to a sane band.
+  const fyStart = `${fiscalYearOf(boundary) - 1}-03`;
+  const clamp = (g: number) => Math.max(-0.5, Math.min(1.0, g));
+  const yoyGrowth = (pick: (a: CfActual) => number): number | null => {
+    let cur = 0;
+    let prior = 0;
+    let pairs = 0;
+    for (const m of actualMonths) {
+      if (m < fyStart) continue;
+      const a = actuals.get(m);
+      const p = actuals.get(addMonths(m, -12));
+      if (!a || !p || pick(p) === 0) continue;
+      cur += pick(a);
+      prior += pick(p);
+      pairs++;
+    }
+    return pairs >= 2 && prior > 0 ? clamp(cur / prior - 1) : null;
+  };
+  const gIncome = yoyGrowth((a) => a.income);
+  const gOther = yoyGrowth((a) => a.other);
 
   const columns: DerivedColumn[] = [];
   let balance = s.opening_balance;
@@ -103,15 +129,19 @@ export function buildDerivedCashflow(
       other = a?.other ?? 0;
     } else {
       const ov = overrides.get(month) ?? {};
+      const lastYear = actuals.get(addMonths(month, -12));
       if (ov.income != null) { income = ov.income; incomeSrc = "manual"; }
+      else if (gIncome != null && lastYear && lastYear.income > 0) { income = lastYear.income * (1 + gIncome); incomeSrc = "yoy"; }
       else { income = incomeAvg; incomeSrc = "avg"; }
       if (ov.people != null) { people = ov.people; peopleSrc = "manual"; }
       else {
         const p = payrollByMonth.get(month) ?? 0;
-        people = p > 0 ? p : peopleAvg;
-        peopleSrc = p > 0 ? "payroll" : "avg";
+        if (p > 0) { people = p; peopleSrc = "payroll"; }
+        else if (activeCtcMonthly > 0) { people = activeCtcMonthly; peopleSrc = "ctc"; }
+        else { people = peopleAvg; peopleSrc = "avg"; }
       }
       if (ov.other != null) { other = ov.other; otherSrc = "manual"; }
+      else if (gOther != null && lastYear && lastYear.other > 0) { other = lastYear.other * (1 + gOther); otherSrc = "yoy"; }
       else { other = otherAvg; otherSrc = "avg"; }
       for (const row of adjustments) {
         const v = row.values.get(month) ?? 0;
@@ -173,5 +203,7 @@ export function buildDerivedCashflow(
       lowest: scenarios.base.lowest,
     },
     avgBasis,
+    growthIncomePct: gIncome != null ? Math.round(gIncome * 1000) / 10 : null,
+    growthOtherPct: gOther != null ? Math.round(gOther * 1000) / 10 : null,
   };
 }

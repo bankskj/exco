@@ -17,6 +17,7 @@ export type Employee = {
   paye_default: number;
   type: EmployeeType;
   status: "active" | "inactive";
+  inactive_date: string | null; // set when status flips to inactive
   sort_order: number;
 };
 
@@ -30,7 +31,7 @@ export type PayrollEntry = {
 
 export async function listEmployees(db: D1Database): Promise<Employee[]> {
   const { results } = await db
-    .prepare("SELECT id, name, mentor, ctc, paye_default, type, status, sort_order FROM employees ORDER BY sort_order, name")
+    .prepare("SELECT id, name, mentor, ctc, paye_default, type, status, inactive_date, sort_order FROM employees ORDER BY sort_order, name")
     .all<Employee>();
   return results ?? [];
 }
@@ -52,17 +53,22 @@ export async function createEmployee(
 export async function updateEmployee(
   db: D1Database,
   id: string,
-  e: { name: string; mentor?: string | null; ctc?: number | null; paye_default?: number; type?: string; status?: string },
+  e: { name: string; mentor?: string | null; ctc?: number | null; paye_default?: number; type?: string; status?: string; inactive_date?: string | null },
 ): Promise<void> {
   const type = e.type ?? "za";
   await db
-    .prepare("UPDATE employees SET name=?, mentor=?, ctc=?, paye_default=?, type=?, status=?, updated_at=datetime('now') WHERE id=?")
-    .bind(e.name, e.mentor ?? null, e.ctc ?? null, hasPaye(type) ? e.paye_default ?? 0 : 0, type, e.status ?? "active", id)
+    .prepare("UPDATE employees SET name=?, mentor=?, ctc=?, paye_default=?, type=?, status=?, inactive_date=?, updated_at=datetime('now') WHERE id=?")
+    .bind(e.name, e.mentor ?? null, e.ctc ?? null, hasPaye(type) ? e.paye_default ?? 0 : 0, type, e.status ?? "active", e.inactive_date ?? null, id)
     .run();
   if (!hasPaye(type)) {
     // International / freelancer never have PAYE — clear any stored monthly tax.
     await db.prepare("UPDATE payroll_entries SET paye=0 WHERE employee_id=?").bind(id).run();
   }
+}
+
+/** Remove captured months after an employee's inactive month. */
+export async function pruneEntriesAfter(db: D1Database, employeeId: string, lastMonth: string): Promise<void> {
+  await db.prepare("DELETE FROM payroll_entries WHERE employee_id = ? AND period > ?").bind(employeeId, lastMonth).run();
 }
 
 /**

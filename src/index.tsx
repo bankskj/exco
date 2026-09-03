@@ -48,6 +48,7 @@ import {
   deleteEmployee,
   setEmployeeType,
   fillPayeFromDefaults,
+  pruneEntriesAfter,
   EMPLOYEE_TYPES,
 } from "./data/payroll";
 import {
@@ -292,11 +293,17 @@ app.post("/app/payroll/employees/save", async (c) => {
     const payeRaw = String(b[`ep_${e.id}`] ?? "").trim();
     const paye_default = payeRaw === "" ? 0 : parseMoney(payeRaw);
     const status = String(b[`es_${e.id}`]) === "inactive" ? "inactive" : "active";
+    // Record the inactive date on the transition; clear it on reactivation.
+    let inactive_date = e.inactive_date;
+    if (status === "inactive" && e.status === "active") inactive_date = new Date().toISOString().slice(0, 10);
+    if (status === "active") inactive_date = null;
     const changed =
       trimmedName !== e.name || type !== e.type || mentor !== (e.mentor ?? null) ||
-      (ctc ?? null) !== (e.ctc ?? null) || paye_default !== e.paye_default || status !== e.status;
+      (ctc ?? null) !== (e.ctc ?? null) || paye_default !== e.paye_default || status !== e.status ||
+      inactive_date !== e.inactive_date;
     if (changed) {
-      await updateEmployee(c.env.DB, e.id, { name: trimmedName, mentor, ctc, paye_default, type, status });
+      await updateEmployee(c.env.DB, e.id, { name: trimmedName, mentor, ctc, paye_default, type, status, inactive_date });
+      if (status === "inactive" && inactive_date) await pruneEntriesAfter(c.env.DB, e.id, inactive_date.slice(0, 7));
     }
   }
   return c.redirect("/app/payroll/capture?saved=1");
@@ -377,7 +384,11 @@ app.post("/app/payroll/employees/import", async (c) => {
     const status = statusRaw === "inactive" ? "inactive" : statusRaw === "active" ? "active" : existing?.status ?? "active";
 
     if (existing) {
-      await updateEmployee(c.env.DB, existing.id, { name, mentor, ctc, paye_default, type, status });
+      let inactive_date = existing.inactive_date;
+      if (status === "inactive" && existing.status === "active") inactive_date = new Date().toISOString().slice(0, 10);
+      if (status === "active") inactive_date = null;
+      await updateEmployee(c.env.DB, existing.id, { name, mentor, ctc, paye_default, type, status, inactive_date });
+      if (status === "inactive" && inactive_date) await pruneEntriesAfter(c.env.DB, existing.id, inactive_date.slice(0, 7));
       updated++;
     } else {
       await createEmployee(c.env.DB, { name, mentor, ctc, paye_default, type, status });
@@ -449,10 +460,11 @@ const OVERRIDE_GRP = "__override__";
 const OVERRIDE_NAMES = ["Income", "People", "Other expenses"];
 
 async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
-  const [settings, actuals, payrollEntries, allExpenses, categories, entries, synced] = await Promise.all([
+  const [settings, actuals, payrollEntries, payrollEmps, allExpenses, categories, entries, synced] = await Promise.all([
     getSettings(env.DB),
     listCfActuals(env.DB),
     listPayrollEntries(env.DB),
+    listEmployees(env.DB),
     listExpenses(env.DB),
     listCategories(env.DB),
     listEntries(env.DB),
@@ -460,10 +472,16 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   ]);
   // Total payroll gross by month — the grid covers salaried staff AND the
   // contractors/freelancers who appear in Xero as Developer/Contractor bills.
+  // Months after an employee's inactive date don't count.
+  const empById = new Map(payrollEmps.map((e) => [e.id, e]));
   const payrollByMonth = new Map<string, number>();
   for (const pe of payrollEntries) {
+    const emp = empById.get(pe.employee_id);
+    if (emp?.status === "inactive" && emp.inactive_date && pe.period > emp.inactive_date.slice(0, 7)) continue;
     payrollByMonth.set(pe.period, (payrollByMonth.get(pe.period) ?? 0) + pe.gross);
   }
+  // Fallback people cost beyond the grid: sum of active employees' CTC.
+  const activeCtcMonthly = payrollEmps.filter((e) => e.status === "active").reduce((t, e) => t + (e.ctc ?? 0), 0);
   const manualMonthly = allExpenses
     .filter((e) => e.source === "manual" && e.active)
     .reduce((sum, e) => sum + monthlyEquivalent(e), 0);
@@ -492,7 +510,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
-  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map());
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcMonthly);
   // Collections gap: invoiced (accrual) vs received (cash) per complete month,
   // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
   const debtors = await listCfDebtors(env.DB);
