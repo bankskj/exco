@@ -205,11 +205,29 @@ export const PayrollCapturePage: FC<{
 }> = ({ employees, report, gridPeriods, from, months, metric, typeFilter, saved, importMsg }) => {
   const visible = typeFilter ? employees.filter((e) => e.type === typeFilter) : employees;
   const cellVal = (empId: string, p: string) => report.matrix.get(empId)?.get(p);
+  // Months after the last captured one are "planned": blank cells fall back to
+  // CTC / default PAYE for active staff — the same values the grid displays.
+  const lastCaptured = report.latest ?? "";
+  const isPlanned = (p: string) => p > lastCaptured;
+  const cutOff = (e: Employee, p: string) => e.status === "inactive" && !!e.inactive_date && p > e.inactive_date.slice(0, 7);
+  /** The values a cell effectively shows: captured, or the planning prefill. */
+  const effective = (e: Employee, p: string): { gross: number; paye: number; planned: boolean } | null => {
+    if (cutOff(e, p)) return null;
+    const c = cellVal(e.id, p);
+    if (c) {
+      const paye = c.paye > 0 ? c.paye : c.gross > 0 ? e.paye_default : 0;
+      return { gross: c.gross, paye, planned: false };
+    }
+    if (isPlanned(p) && e.status === "active" && e.ctc != null && e.ctc > 0) {
+      return { gross: e.ctc, paye: e.paye_default, planned: true };
+    }
+    return null;
+  };
   const colTotal = (p: string) =>
     visible.reduce((sum, e) => {
-      const c = cellVal(e.id, p);
-      if (!c) return sum;
-      return sum + (metric === "gross" ? c.gross : metric === "paye" ? c.paye : c.gross - c.paye);
+      const v = effective(e, p);
+      if (!v) return sum;
+      return sum + (metric === "gross" ? v.gross : metric === "paye" ? v.paye : v.gross - v.paye);
     }, 0);
 
   const qs = (over: Partial<{ metric: string; type: string; from: string; months: number }>) => {
@@ -323,18 +341,20 @@ export const PayrollCapturePage: FC<{
                           return <td class="muted" style="text-align:center" title={`Inactive from ${e.inactive_date}`}>—</td>;
                         }
                         const c = cellVal(e.id, p);
+                        const eff = effective(e, p);
                         if (metric === "nett") {
-                          const nett = c ? c.gross - c.paye : null;
-                          return <td class="num">{nett != null ? formatZAR(nett) : ""}</td>;
+                          if (c) return <td class="num">{formatZAR(c.gross - c.paye)}</td>;
+                          if (eff?.planned) return <td class="num muted">{formatZAR(eff.gross - eff.paye)}</td>;
+                          return <td class="num"></td>;
                         }
                         if (payeDisabled) return <td class="muted" style="text-align:center">n/a</td>;
                         const v = c ? (metric === "gross" ? c.gross : c.paye) : undefined;
                         const nm = `${metric === "gross" ? "g" : "t"}_${e.id}_${p}`;
-                        // Prefill hints: gross cells show the active employee's CTC;
-                        // PAYE cells show the default where the month was paid.
+                        // Prefill hints (planned months and paid-but-untaxed cells):
+                        // the same values the totals row counts.
                         let hint = "";
-                        if (metric === "gross" && (!v || v === 0) && e.status === "active" && e.ctc) hint = String(e.ctc);
-                        if (metric === "paye" && (!v || v === 0) && c && c.gross > 0 && e.paye_default > 0) hint = String(e.paye_default);
+                        if (metric === "gross" && (!v || v === 0) && eff?.planned) hint = String(eff.gross);
+                        if (metric === "paye" && (!v || v === 0) && e.paye_default > 0 && ((c && c.gross > 0) || eff?.planned)) hint = String(e.paye_default);
                         return (
                           <td>
                             <input type="text" inputmode="decimal" name={nm} value={v != null && v !== 0 ? String(v) : ""} placeholder={hint} autocomplete="off" />
