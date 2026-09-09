@@ -12,6 +12,8 @@ import {
   updateHrEmployee,
   listNotes,
   createNote,
+  updateNote,
+  getNote,
   deleteNote,
   warningCounts,
   documentsForNotes,
@@ -758,6 +760,26 @@ app.post("/app/hr/:id/update", async (c) => {
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per file
 
+/** Store uploaded/pasted attachments (the `files` field) against a note. */
+async function saveNoteAttachments(c: any, empId: string, noteId: string, raw: unknown): Promise<void> {
+  const files = (Array.isArray(raw) ? raw : [raw]).filter((f): f is File => f instanceof File && f.size > 0);
+  for (const f of files) {
+    if (f.size > MAX_UPLOAD_BYTES) continue;
+    const safe = f.name.replace(/[^\w.\- ]+/g, "_").slice(0, 120);
+    const key = `hr/${empId}/${noteId}/${crypto.randomUUID()}-${safe}`;
+    await c.env.UPLOADS.put(key, f.stream(), {
+      httpMetadata: { contentType: f.type || "application/octet-stream" },
+    });
+    await registerDocument(c.env.DB, {
+      r2_key: key,
+      filename: f.name,
+      content_type: f.type || null,
+      size_bytes: f.size,
+      ref_id: noteId,
+    });
+  }
+}
+
 app.post("/app/hr/:id/note", async (c) => {
   const id = c.req.param("id");
   const emp = await getHrEmployee(c.env.DB, id);
@@ -773,24 +795,28 @@ app.post("/app/hr/:id/note", async (c) => {
     body: String(body.body ?? "").trim() || null,
     note_date: parseDateInput(String(body.note_date)),
   });
-  // Attachments → R2 + documents registry.
-  const raw = body.files;
-  const files = (Array.isArray(raw) ? raw : [raw]).filter((f): f is File => f instanceof File && f.size > 0);
-  for (const f of files) {
-    if (f.size > MAX_UPLOAD_BYTES) continue;
-    const safe = f.name.replace(/[^\w.\- ]+/g, "_").slice(0, 120);
-    const key = `hr/${id}/${noteId}/${crypto.randomUUID()}-${safe}`;
-    await c.env.UPLOADS.put(key, f.stream(), {
-      httpMetadata: { contentType: f.type || "application/octet-stream" },
-    });
-    await registerDocument(c.env.DB, {
-      r2_key: key,
-      filename: f.name,
-      content_type: f.type || null,
-      size_bytes: f.size,
-      ref_id: noteId,
-    });
-  }
+  await saveNoteAttachments(c, id, noteId, body.files);
+  return c.redirect(`/app/hr/${id}?saved=1`);
+});
+
+app.post("/app/hr/:id/note/:noteId", async (c) => {
+  const id = c.req.param("id");
+  const noteId = c.req.param("noteId");
+  const emp = await getHrEmployee(c.env.DB, id);
+  if (!emp) return c.redirect("/app/hr");
+  const existing = await getNote(c.env.DB, noteId);
+  if (!existing || existing.employee_id !== id) return c.redirect(`/app/hr/${id}`);
+  const body = await c.req.parseBody({ all: true });
+  const title = String(body.title ?? "").trim();
+  if (!title) return c.redirect(`/app/hr/${id}`);
+  const kind = NOTE_KINDS.includes(String(body.kind) as any) ? String(body.kind) : existing.kind;
+  await updateNote(c.env.DB, noteId, {
+    kind,
+    title,
+    body: String(body.body ?? "").trim() || null,
+    note_date: parseDateInput(String(body.note_date)),
+  });
+  await saveNoteAttachments(c, id, noteId, body.files);
   return c.redirect(`/app/hr/${id}?saved=1`);
 });
 
