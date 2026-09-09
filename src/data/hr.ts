@@ -31,6 +31,7 @@ export type HrNote = {
   body: string | null;
   note_date: string | null;
   created_at: string;
+  updated_at: string | null;
 };
 
 export type HrDocument = {
@@ -81,7 +82,7 @@ export async function updateHrEmployee(db: D1Database, id: string, e: Partial<Hr
 export async function listNotes(db: D1Database, employeeId: string): Promise<HrNote[]> {
   const { results } = await db
     .prepare(
-      "SELECT id, employee_id, kind, title, body, note_date, created_at FROM hr_notes WHERE employee_id = ? ORDER BY COALESCE(note_date, substr(created_at,1,10)) DESC, created_at DESC",
+      "SELECT id, employee_id, kind, title, body, note_date, created_at, updated_at FROM hr_notes WHERE employee_id = ? ORDER BY COALESCE(note_date, substr(created_at,1,10)) DESC, created_at DESC",
     )
     .bind(employeeId)
     .all<HrNote>();
@@ -110,9 +111,20 @@ export async function createNote(
 
 export async function getNote(db: D1Database, id: string): Promise<HrNote | null> {
   return db
-    .prepare("SELECT id, employee_id, kind, title, body, note_date, created_at FROM hr_notes WHERE id = ?")
+    .prepare("SELECT id, employee_id, kind, title, body, note_date, created_at, updated_at FROM hr_notes WHERE id = ?")
     .bind(id)
     .first<HrNote>();
+}
+
+export async function updateNote(
+  db: D1Database,
+  id: string,
+  n: { kind: string; title: string; body?: string | null; note_date?: string | null },
+): Promise<void> {
+  await db
+    .prepare("UPDATE hr_notes SET kind = ?, title = ?, body = ?, note_date = ?, updated_at = datetime('now') WHERE id = ?")
+    .bind(n.kind, n.title, n.body ?? null, n.note_date ?? null, id)
+    .run();
 }
 
 export async function deleteNote(db: D1Database, id: string): Promise<void> {

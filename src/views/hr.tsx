@@ -33,6 +33,61 @@ const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = (
 
 const KindBadge: FC<{ kind: NoteKind }> = ({ kind }) => <span class={`badge kind-${kind}`}>{KIND_LABEL[kind]}</span>;
 
+const KindOptions: FC<{ selected: NoteKind }> = ({ selected }) => (
+  <>
+    {[...NOTE_KINDS]
+      .sort((a, b) => KIND_LABEL[a].localeCompare(KIND_LABEL[b]))
+      .map((k) => (
+        <option value={k} selected={k === selected}>{KIND_LABEL[k]}</option>
+      ))}
+  </>
+);
+
+// Wires the Details box so pasted screenshots/images upload as attachments, and
+// toggles the per-entry edit form. Applies to every current + future page use.
+const HR_SCRIPT = `
+document.querySelectorAll('form.hr-note').forEach(function(form){
+  var ta = form.querySelector('textarea.paste-body');
+  var fileInput = form.querySelector('input[type=file]');
+  var previews = form.querySelector('.paste-previews');
+  if(!fileInput) return;
+  var dt = new DataTransfer();
+  fileInput.addEventListener('change', function(){
+    for(var j=0;j<fileInput.files.length;j++){
+      var f=fileInput.files[j], dup=false;
+      for(var k=0;k<dt.items.length;k++){ if(dt.files[k].name===f.name && dt.files[k].size===f.size){dup=true;break;} }
+      if(!dup) dt.items.add(f);
+    }
+    fileInput.files = dt.files;
+  });
+  if(!ta) return;
+  ta.addEventListener('paste', function(e){
+    var items = (e.clipboardData||window.clipboardData||{}).items; if(!items) return;
+    for(var i=0;i<items.length;i++){
+      var it=items[i];
+      if(it.kind==='file' && it.type.indexOf('image/')===0){
+        var blob=it.getAsFile(); if(!blob) continue;
+        var ext=(it.type.split('/')[1]||'png').split('+')[0];
+        var file=new File([blob], 'pasted-'+Date.now()+'-'+i+'.'+ext, {type:it.type});
+        dt.items.add(file); fileInput.files=dt.files;
+        if(previews){
+          var img=document.createElement('img'); img.src=URL.createObjectURL(file);
+          img.style.cssText='max-height:70px;border-radius:6px;border:1px solid var(--border)';
+          previews.appendChild(img);
+        }
+      }
+    }
+  });
+});
+document.querySelectorAll('[data-edit-toggle]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var card=btn.closest('.hist-card'); if(!card) return;
+    var v=card.querySelector('.view-mode'), f=card.querySelector('.edit-form');
+    v.hidden=!v.hidden; f.hidden=!f.hidden;
+  });
+});
+`;
+
 // ---- headcount dashboard --------------------------------------------------
 
 export const HrDashboard: FC<{
@@ -211,18 +266,17 @@ export const HrEmployeePage: FC<{
           <div>
             <div class="card">
               <h3>Add to file</h3>
-              <form method="post" action={`/app/hr/${emp.id}/note`} enctype="multipart/form-data">
+              <form method="post" action={`/app/hr/${emp.id}/note`} enctype="multipart/form-data" class="hr-note">
                 <div class="formgrid">
                   <div><label>Type</label>
-                    <select name="kind">
-                      {[...NOTE_KINDS]
-                        .sort((a, b) => KIND_LABEL[a].localeCompare(KIND_LABEL[b]))
-                        .map((k) => <option value={k} selected={k === "note"}>{KIND_LABEL[k]}</option>)}
-                    </select>
+                    <select name="kind"><KindOptions selected="note" /></select>
                   </div>
                   <div><label>Date</label><DateField name="note_date" value={formatDMY(now.toISOString().slice(0, 10))} /></div>
                   <div class="full"><label>Title</label><input type="text" name="title" required placeholder="e.g. Signed 2026 contract / Exceeded Q2 targets / Late delivery discussion" /></div>
-                  <div class="full"><label>Details</label><textarea name="body" rows={3}></textarea></div>
+                  <div class="full"><label>Details</label>
+                    <textarea name="body" rows={3} class="paste-body" placeholder="Type here. You can paste screenshots or images straight in — they'll be attached."></textarea>
+                    <div class="paste-previews row" style="gap:8px;margin-top:8px"></div>
+                  </div>
                   <div class="full"><label>Attachments (documents / images)</label><input type="file" name="files" multiple style="font-size:13px" /></div>
                   <div><button class="btn btn-primary" type="submit">Add entry</button></div>
                 </div>
@@ -235,40 +289,64 @@ export const HrEmployeePage: FC<{
               {notes.map((n) => {
                 const atts = docs.get(n.id) ?? [];
                 return (
-                  <div class="card" style="margin-bottom:12px">
-                    <div class="row spread">
-                      <div class="row" style="gap:10px">
-                        <KindBadge kind={n.kind} />
-                        <strong>{n.title}</strong>
+                  <div class="card hist-card" style="margin-bottom:12px">
+                    <div class="view-mode">
+                      <div class="row spread">
+                        <div class="row" style="gap:10px">
+                          <KindBadge kind={n.kind} />
+                          <strong>{n.title}</strong>
+                        </div>
+                        <div class="row" style="gap:10px">
+                          <span class="muted" style="font-size:12px">{formatDMY(n.note_date ?? n.created_at.slice(0, 10))}</span>
+                          {n.updated_at ? <span class="muted" style="font-size:11px">· edited {formatDMY(n.updated_at.slice(0, 10))}</span> : null}
+                          <button type="button" class="btn btn-sm" data-edit-toggle>Edit</button>
+                          <form method="post" action="/app/hr/note/delete" style="margin:0"
+                            onsubmit="return confirm('Delete this entry and its attachments?')">
+                            <input type="hidden" name="id" value={n.id} />
+                            <input type="hidden" name="emp" value={emp.id} />
+                            <button class="btn btn-sm btn-danger" type="submit">✕</button>
+                          </form>
+                        </div>
                       </div>
-                      <div class="row" style="gap:10px">
-                        <span class="muted" style="font-size:12px">{formatDMY(n.note_date ?? n.created_at.slice(0, 10))}</span>
-                        <form method="post" action="/app/hr/note/delete" style="margin:0"
-                          onsubmit="return confirm('Delete this entry and its attachments?')">
-                          <input type="hidden" name="id" value={n.id} />
-                          <input type="hidden" name="emp" value={emp.id} />
-                          <button class="btn btn-sm btn-danger" type="submit">✕</button>
-                        </form>
-                      </div>
+                      {n.body ? <p style="margin:10px 0 0;white-space:pre-wrap">{n.body}</p> : null}
+                      {atts.length > 0 ? (
+                        <div class="row" style="gap:10px;margin-top:12px;flex-wrap:wrap">
+                          {atts.map((d) =>
+                            d.content_type?.startsWith("image/") ? (
+                              <a href={`/app/hr/file/${d.id}`} target="_blank">
+                                <img src={`/app/hr/file/${d.id}`} alt={d.filename} style="max-height:120px;max-width:200px;border-radius:8px;border:1px solid var(--border)" />
+                              </a>
+                            ) : (
+                              <a class="btn btn-sm" href={`/app/hr/file/${d.id}`} target="_blank">📄 {d.filename}</a>
+                            ),
+                          )}
+                        </div>
+                      ) : null}
                     </div>
-                    {n.body ? <p style="margin:10px 0 0;white-space:pre-wrap">{n.body}</p> : null}
-                    {atts.length > 0 ? (
-                      <div class="row" style="gap:10px;margin-top:12px;flex-wrap:wrap">
-                        {atts.map((d) =>
-                          d.content_type?.startsWith("image/") ? (
-                            <a href={`/app/hr/file/${d.id}`} target="_blank">
-                              <img src={`/app/hr/file/${d.id}`} alt={d.filename} style="max-height:120px;max-width:200px;border-radius:8px;border:1px solid var(--border)" />
-                            </a>
-                          ) : (
-                            <a class="btn btn-sm" href={`/app/hr/file/${d.id}`} target="_blank">📄 {d.filename}</a>
-                          ),
-                        )}
+
+                    <form method="post" action={`/app/hr/${emp.id}/note/${n.id}`} enctype="multipart/form-data" class="hr-note edit-form" hidden>
+                      <div class="formgrid">
+                        <div><label>Type</label>
+                          <select name="kind"><KindOptions selected={n.kind} /></select>
+                        </div>
+                        <div><label>Date</label><DateField name="note_date" value={formatDMY(n.note_date ?? n.created_at.slice(0, 10))} /></div>
+                        <div class="full"><label>Title</label><input type="text" name="title" required value={n.title} /></div>
+                        <div class="full"><label>Details</label>
+                          <textarea name="body" rows={3} class="paste-body" placeholder="Type here. You can paste screenshots or images straight in — they'll be attached.">{n.body ?? ""}</textarea>
+                          <div class="paste-previews row" style="gap:8px;margin-top:8px"></div>
+                        </div>
+                        <div class="full"><label>Add attachments (documents / images)</label><input type="file" name="files" multiple style="font-size:13px" /></div>
+                        <div class="row" style="gap:10px">
+                          <button class="btn btn-primary btn-sm" type="submit">Save changes</button>
+                          <button type="button" class="btn btn-sm btn-ghost" data-edit-toggle>Cancel</button>
+                        </div>
                       </div>
-                    ) : null}
+                    </form>
                   </div>
                 );
               })}
             </div>
+            <script dangerouslySetInnerHTML={{ __html: HR_SCRIPT }} />
           </div>
         </div>
       </div>
