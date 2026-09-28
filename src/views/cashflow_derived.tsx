@@ -3,7 +3,7 @@ import { Layout } from "./layout";
 import type { DerivedCashflow } from "../lib/cashflow_engine";
 import type { CFSettings } from "../lib/forecast";
 import { formatZAR } from "../lib/money";
-import { label, shortLabel, fiscalYearOf, fyLabel } from "../lib/period";
+import { label, shortLabel, fiscalYearOf, fyLabel, formatDMYTime } from "../lib/period";
 import { lineChart, comboBars } from "../lib/charts";
 import { AccountsTabs } from "./income";
 
@@ -26,8 +26,10 @@ export const CashflowDerivedPage: FC<{
   position: { bankToday: number; debtorsDue: number; revolving: number; month: string };
   collections: { month: string; invoiced: number; received: number; gap: number; stillDue: number | null }[];
   syncNote?: string;
+  lastSync?: string | null;
+  msg?: string;
   saved?: boolean;
-}> = ({ cf, settings, fy, fys, collections, position, syncNote, saved }) => {
+}> = ({ cf, settings, fy, fys, collections, position, syncNote, lastSync, msg, saved }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const visible = cf.columns.filter((c) => inFy(c.month));
   const boundary = settings.actuals_through;
@@ -54,6 +56,7 @@ export const CashflowDerivedPage: FC<{
         </div>
 
         {saved ? <div class="callout" style="margin-bottom:16px">✓ Saved.</div> : null}
+        {msg ? <div class="callout" style="margin-bottom:16px">{msg}</div> : null}
         {syncNote ? <div class="callout" style="margin-bottom:16px;border-left-color:var(--danger)">{syncNote}</div> : null}
         {settings.opening_balance === 1000000 && settings.opening_period <= "2025-03" ? (
           <div class="callout" style="margin-bottom:16px;border-left-color:#f6c453">
@@ -73,15 +76,24 @@ export const CashflowDerivedPage: FC<{
               <a href={`/app/accounts?fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
             ))}
           </div>
-          <form method="post" action="/app/accounts/actuals-through" class="row" style="gap:8px;margin:0">
-            <label style="margin:0">Books complete through</label>
-            <select name="actuals_through" style="width:auto;padding:8px 12px">
-              {cf.months.filter((m) => m <= new Date().toISOString().slice(0, 7)).map((m) => (
-                <option value={m} selected={m === boundary}>{label(m)}</option>
-              ))}
-            </select>
-            <button class="btn btn-sm btn-primary" type="submit">Set</button>
-          </form>
+          <div class="row" style="gap:14px;align-items:center">
+            <div class="row" style="gap:8px;align-items:center">
+              <span class="muted" style="font-size:12px">Last Xero sync: {lastSync ? formatDMYTime(lastSync) : "never"}</span>
+              <form method="post" action="/app/expenses/sync" style="margin:0">
+                <input type="hidden" name="back" value="accounts" />
+                <button class="btn btn-sm" type="submit">↻ Sync now</button>
+              </form>
+            </div>
+            <form method="post" action="/app/accounts/actuals-through" class="row" style="gap:8px;margin:0">
+              <label style="margin:0">Books complete through</label>
+              <select name="actuals_through" style="width:auto;padding:8px 12px">
+                {cf.months.filter((m) => m <= new Date().toISOString().slice(0, 7)).map((m) => (
+                  <option value={m} selected={m === boundary}>{label(m)}</option>
+                ))}
+              </select>
+              <button class="btn btn-sm btn-primary" type="submit">Set</button>
+            </form>
+          </div>
         </div>
 
         <div class="kpis section-block">

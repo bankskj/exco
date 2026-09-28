@@ -3,7 +3,7 @@ import { Layout, DateField } from "./layout";
 import { type RecurringExpense, type VendorBill, type BillingPattern, FREQUENCIES, monthlyEquivalent } from "../data/expenses";
 import type { XeroState } from "../lib/xero";
 import { formatZAR } from "../lib/money";
-import { formatDMY } from "../lib/period";
+import { formatDMY, formatDMYTime } from "../lib/period";
 import { hBars } from "../lib/charts";
 import { ExpenseTabs } from "./monthly_expenses";
 
@@ -87,7 +87,7 @@ export const ExpensesPage: FC<{
           <Kpi label="Monthly total" value={formatZAR(monthlyTotal)} sub={`${active.length} active expenses`} />
           <Kpi label="Annualised" value={formatZAR(monthlyTotal * 12)} />
           <Kpi label="From Xero" value={String(fromXero)} sub={xero.orgName ?? "not connected"} />
-          <Kpi label="Last Xero sync" value={xero.lastSync ? formatDMY(xero.lastSync.slice(0, 10)) : "—"} />
+          <Kpi label="Last Xero sync" value={xero.lastSync ? formatDMYTime(xero.lastSync) : "—"} />
           <Kpi label="Mid-month (days 10–20)" value={formatZAR(midTotal)}
             sub={`${midRows.length} expense(s) · ${monthlyTotal ? Math.round((midTotal / monthlyTotal) * 100) : 0}% of monthly`} />
           <Kpi label="Month-end" value={formatZAR(endTotal)}

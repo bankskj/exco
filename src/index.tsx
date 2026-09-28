@@ -548,7 +548,9 @@ app.get("/app/accounts", async (c) => {
     if (fys.includes(curFy)) fy = curFy;
   }
   const visibleCollections = fy == null ? collections : collections.filter((r) => fiscalYearOf(r.month) === fy);
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} position={position} syncNote={syncNote} saved={c.req.query("saved") === "1"} />);
+  const lastSync = await getMeta(c.env.DB, "xero_last_sync");
+  const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} position={position} syncNote={syncNote} lastSync={lastSync} msg={msg} saved={c.req.query("saved") === "1"} />);
 });
 
 app.get("/app/accounts/edit", async (c) => {
@@ -1120,11 +1122,13 @@ async function runXeroSync(env: Bindings): Promise<string> {
 }
 
 app.post("/app/expenses/sync", async (c) => {
+  // Optional "back" field returns the user to the page they synced from.
+  const back = String((await c.req.parseBody()).back ?? "") === "accounts" ? "/app/accounts" : "/app/expenses";
   try {
     const msg = await runXeroSync(c.env);
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent(msg)}`);
+    return c.redirect(`${back}?msg=${encodeURIComponent(msg)}`);
   } catch (e) {
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
+    return c.redirect(`${back}?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
 });
 

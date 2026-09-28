@@ -83,6 +83,15 @@ export function formatDMY(iso: string | null | undefined): string {
   return `${d}/${m}/${y}`;
 }
 
+/** ISO UTC timestamp → 'DD/MM/YYYY HH:MM SAST' (UTC+2). */
+export function formatDMYTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "—";
+  const t = new Date(ms + 2 * 3600 * 1000).toISOString();
+  return `${formatDMY(t.slice(0, 10))} ${t.slice(11, 16)} SAST`;
+}
+
 // --- Fiscal year (South African convention: March → end February) ---------
 // FY2026 = 2025-03 .. 2026-02. A period belongs to the FY it ends in.
 
