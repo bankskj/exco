@@ -207,7 +207,17 @@ export const PayrollCapturePage: FC<{
   const cellVal = (empId: string, p: string) => report.matrix.get(empId)?.get(p);
   // Months after the last captured one are "planned": blank cells fall back to
   // CTC / default PAYE for active staff — the same values the grid displays.
-  const lastCaptured = report.latest ?? "";
+  // A month only counts as captured once most active employees have entries,
+  // so a stray early cell (or a cleared zero) can't switch off the prefill.
+  const activeCount = employees.filter((e) => e.status === "active").length;
+  const entryCount = new Map<string, number>();
+  for (const byPeriod of report.matrix.values()) {
+    for (const p of byPeriod.keys()) entryCount.set(p, (entryCount.get(p) ?? 0) + 1);
+  }
+  const capturedThreshold = Math.max(1, Math.ceil(activeCount / 2));
+  const lastCaptured = [...entryCount.entries()]
+    .filter(([, n]) => n >= capturedThreshold)
+    .reduce((max, [p]) => (p > max ? p : max), "");
   const isPlanned = (p: string) => p > lastCaptured;
   const cutOff = (e: Employee, p: string) => e.status === "inactive" && !!e.inactive_date && p > e.inactive_date.slice(0, 7);
   /** The values a cell effectively shows: captured, or the planning prefill. */

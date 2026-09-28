@@ -477,13 +477,23 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   // Months after an employee's inactive date don't count.
   const empById = new Map(payrollEmps.map((e) => [e.id, e]));
   const payrollByMonth = new Map<string, number>();
+  const payrollCount = new Map<string, number>();
   for (const pe of payrollEntries) {
     const emp = empById.get(pe.employee_id);
     if (emp?.status === "inactive" && emp.inactive_date && pe.period > emp.inactive_date.slice(0, 7)) continue;
     payrollByMonth.set(pe.period, (payrollByMonth.get(pe.period) ?? 0) + pe.gross);
+    payrollCount.set(pe.period, (payrollCount.get(pe.period) ?? 0) + 1);
   }
   // Fallback people cost beyond the grid: sum of active employees' CTC.
-  const activeCtcMonthly = payrollEmps.filter((e) => e.status === "active").reduce((t, e) => t + (e.ctc ?? 0), 0);
+  const activeEmps = payrollEmps.filter((e) => e.status === "active");
+  const activeCtcMonthly = activeEmps.reduce((t, e) => t + (e.ctc ?? 0), 0);
+  // A partially captured month (fewer than half the active staff, e.g. one
+  // early cell) is not a usable people forecast — drop it so the engine
+  // falls back to active CTC instead of a near-empty grid total.
+  const payrollThreshold = Math.max(1, Math.ceil(activeEmps.length / 2));
+  for (const [m, n] of payrollCount) {
+    if (n < payrollThreshold) payrollByMonth.delete(m);
+  }
   const manualMonthly = allExpenses
     .filter((e) => e.source === "manual" && e.active)
     .reduce((sum, e) => sum + monthlyEquivalent(e), 0);
