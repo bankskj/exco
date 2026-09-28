@@ -110,6 +110,17 @@ table.grid input:focus { outline: none; border-color: var(--accent); background:
 td.fc { color: #f6c453; } /* forecast cell tint */
 .cellhint { font-size: 10px; color: var(--muted); }
 
+/* Right-side slide-out drawer */
+.drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 94vw); background: var(--panel);
+  border-left: 1px solid var(--border); z-index: 41; overflow-y: auto; padding: 22px 24px;
+  box-shadow: -18px 0 40px rgba(0,0,0,.45); animation: drawer-in .18s ease-out; }
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.drawer h3 { margin-top: 0; }
+.drawer table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.drawer td, .drawer th { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); text-align: left; }
+.drawer td.num { text-align: right; }
+
 /* Badges & bits */
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); }
 .badge.income { color: var(--accent-2); border-color: rgba(110,231,183,.35); }

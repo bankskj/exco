@@ -578,7 +578,7 @@ app.get("/app/accounts/edit", async (c) => {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
     map.get(e.category_id)!.set(e.period, { amount: e.amount, status: "forecast" });
   }
-  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} dealValues={dealValues} boundary={settings.actuals_through} saved={c.req.query("saved") === "1"} />);
+  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} dealValues={dealValues} boundary={settings.actuals_through} line={c.req.query("line")} saved={c.req.query("saved") === "1"} />);
 });
 
 app.post("/app/accounts/save", async (c) => {
