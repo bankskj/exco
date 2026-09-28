@@ -235,6 +235,14 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
         <span class="muted" style="font-size:12px">invoiced {formatZAR(invoiced)} · paid {formatZAR(paid)} · outstanding {formatZAR(invoiced - paid)}</span>
       </div>
 
+      <form method="post" action="/app/accounts/deals/expected" class="row" style="gap:8px;align-items:center;margin-bottom:12px">
+        <input type="hidden" name="id" value={deal.id} />
+        <label style="margin:0;font-size:13px">Expected payment</label>
+        <div style="width:130px"><DateField name="expected_payment" value={deal.expected_payment ? formatDMY(deal.expected_payment) : ""} /></div>
+        <button class="btn btn-sm" type="submit">Save</button>
+        <span class="muted" style="font-size:12px">unpaid deals with a date show as pipeline income on the <a href="/app/accounts/edit">Forecast grid</a></span>
+      </form>
+
       <details style="margin-bottom:14px">
         <summary style="cursor:pointer;color:var(--accent);font-size:13px">✏️ Edit deal details</summary>
         <form method="post" action="/app/accounts/deals/update" class="formgrid" style="margin-top:12px">

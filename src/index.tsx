@@ -1321,6 +1321,17 @@ app.post("/app/accounts/deals/update", async (c) => {
   return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
 });
 
+app.post("/app/accounts/deals/expected", async (c) => {
+  const b = await c.req.parseBody();
+  const id = String(b.id ?? "");
+  if (id) {
+    await c.env.DB.prepare("UPDATE commissions SET expected_payment=?, updated_at=datetime('now') WHERE id=?")
+      .bind(parseDateInput(String(b.expected_payment)), id)
+      .run();
+  }
+  return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
+});
+
 app.post("/app/accounts/deals/stage", async (c) => {
   const b = await c.req.parseBody();
   if (b.id && COMM_STAGES.includes(String(b.stage) as any)) {
