@@ -603,7 +603,9 @@ app.post("/app/accounts/save", async (c) => {
     const status = period <= at ? "actual" : "forecast";
     await upsertEntry(c.env.DB, categoryId, period, newVal, status);
   }
-  return c.redirect("/app/accounts/edit?saved=1");
+  // Keep the details drawer open when the save came from it.
+  const line = String(body.line ?? "");
+  return c.redirect(`/app/accounts/edit?saved=1${line && /^[a-z_0-9-]+$/i.test(line) ? `&line=${line}` : ""}`);
 });
 
 app.post("/app/accounts/actuals-through", async (c) => {

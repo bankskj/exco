@@ -120,6 +120,9 @@ td.fc { color: #f6c453; } /* forecast cell tint */
 .drawer table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .drawer td, .drawer th { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); text-align: left; }
 .drawer td.num { text-align: right; }
+.drawer td input { width: 120px; text-align: right; padding: 5px 8px; font-size: 13px;
+  background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
+.drawer td input:focus { outline: none; border-color: var(--accent); background: #0c0f14; }
 
 /* Badges & bits */
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); }

@@ -50,20 +50,32 @@ export const ForecastGridPage: FC<{
 
   // ---- Details drawer -------------------------------------------------------
   const lineHref = (key: string) => `/app/accounts/edit?line=${key}`;
-  type DrawerRow = { month: string; value: number | null; src: string | null; forecast: boolean };
+  type DrawerRow = {
+    month: string;
+    value: number | null;
+    src: string | null;
+    forecast: boolean;
+    input?: { name: string; value: string; placeholder: string }; // editable forecast cell
+  };
   type Drawer = { title: string; badge?: string; desc: string; how: string; edit: { href: string; label: string }; rows: DrawerRow[] };
 
   const buildDrawer = (key: string): Drawer | null => {
     const yoyIncome = cf.growthIncomePct != null ? `${cf.growthIncomePct >= 0 ? "+" : ""}${cf.growthIncomePct}%` : null;
     const yoyOther = cf.growthOtherPct != null ? `${cf.growthOtherPct >= 0 ? "+" : ""}${cf.growthOtherPct}%` : null;
-    const modelRows = (k: "income" | "people" | "other"): DrawerRow[] =>
-      allMonths.map((m) => {
+    const modelRows = (k: "income" | "people" | "other"): DrawerRow[] => {
+      const cat = overrideCats.find((c2) => rowKind(c2.name) === k);
+      return allMonths.map((m) => {
         const c = colByMonth.get(m);
         if (!c) return { month: m, value: null, src: null, forecast: false };
         const v = k === "income" ? c.income : k === "people" ? c.people : c.other;
         const src = c.isForecast ? srcLabel(k === "income" ? c.incomeSrc : k === "people" ? c.peopleSrc : c.otherSrc) : "actual";
-        return { month: m, value: v, src, forecast: c.isForecast };
+        const ov = cat ? entries.get(cat.id)?.get(m) : undefined;
+        const input = c.isForecast && cat
+          ? { name: `e_${cat.id}_${m}`, value: ov ? String(ov.amount) : "", placeholder: String(Math.round(v)) }
+          : undefined;
+        return { month: m, value: v, src, forecast: c.isForecast, input };
       });
+    };
     const editGrid = { href: "/app/accounts/edit", label: "Edit in the grid" };
     if (key === "income")
       return {
@@ -106,7 +118,11 @@ export const ForecastGridPage: FC<{
         desc: `A manual ${cat.kind} row you added — e.g. an outstanding project, pipeline item or once-off. It adds on top of the model in forecast months (actual months always come from the books).`,
         how: "Type amounts directly into the grid cells for the months it lands; clear a cell to remove it. Delete the whole row under “Add a row” below the grid.",
         edit: editGrid,
-        rows: allMonths.map((m) => ({ month: m, value: entries.get(cat.id)?.get(m)?.amount ?? null, src: entries.get(cat.id)?.get(m) ? "manual" : null, forecast: m > boundary })),
+        rows: allMonths.map((m) => {
+          const v = entries.get(cat.id)?.get(m)?.amount ?? null;
+          const input = m > boundary ? { name: `e_${cat.id}_${m}`, value: v != null ? String(v) : "", placeholder: "" } : undefined;
+          return { month: m, value: v, src: v != null ? "manual" : null, forecast: m > boundary, input };
+        }),
       };
     }
     if (key === "net")
@@ -286,18 +302,37 @@ export const ForecastGridPage: FC<{
             <p style="font-size:13px;margin-top:4px">{drawer.desc}</p>
             <p class="muted" style="font-size:13px"><strong>How it's calculated:</strong> {drawer.how}</p>
             <a class="btn btn-sm" href={drawer.edit.href} style="margin:4px 0 14px">✏️ {drawer.edit.label}</a>
-            <table>
-              <thead><tr><th>Month</th><th style="text-align:right">Value</th><th style="text-align:right">Source</th></tr></thead>
-              <tbody>
-                {drawer.rows.map((r) => (
-                  <tr>
-                    <td class={r.forecast ? "" : "muted"}>{label(r.month)}</td>
-                    <td class={`num ${r.value != null && r.value < 0 ? "neg" : ""}`}>{r.value != null ? formatZAR(r.value) : "—"}</td>
-                    <td class="num muted" style="font-size:11px">{r.src ?? (r.forecast ? "forecast" : "")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {(() => {
+              const editable = drawer.rows.some((r) => r.input);
+              const tbl = (
+                <table>
+                  <thead><tr><th>Month</th><th style="text-align:right">Value</th><th style="text-align:right">Source</th></tr></thead>
+                  <tbody>
+                    {drawer.rows.map((r) => (
+                      <tr>
+                        <td class={r.forecast ? "" : "muted"}>{label(r.month)}</td>
+                        <td class={`num ${r.value != null && r.value < 0 ? "neg" : ""}`}>
+                          {r.input
+                            ? <input type="text" inputmode="decimal" name={r.input.name} value={r.input.value} placeholder={r.input.placeholder} autocomplete="off" />
+                            : r.value != null ? formatZAR(r.value) : "—"}
+                        </td>
+                        <td class="num muted" style="font-size:11px">{r.src ?? (r.forecast ? "forecast" : "")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+              return editable ? (
+                <form method="post" action="/app/accounts/save">
+                  <input type="hidden" name="line" value={line} />
+                  {tbl}
+                  <div class="row" style="gap:10px;align-items:center;margin-top:12px">
+                    <button class="btn btn-sm btn-primary" type="submit">Save</button>
+                    <span class="muted" style="font-size:12px">Typed values override the model; clear to return to it.</span>
+                  </div>
+                </form>
+              ) : tbl;
+            })()}
             <p class="muted" style="font-size:12px;margin-top:12px">Greyed months are actuals (books complete); the rest are forecast.</p>
           </aside>
         </>
