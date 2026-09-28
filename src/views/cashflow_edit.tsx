@@ -22,9 +22,10 @@ export const ForecastGridPage: FC<{
   overrideCats: CFCategory[]; // the three fixed override rows
   adjCats: CFCategory[]; // user-defined additional rows
   entries: EntryMap;
+  dealValues?: Map<string, number>; // pipeline income from deals' expected payment dates (read-only)
   boundary: string;
   saved?: boolean;
-}> = ({ cf, overrideCats, adjCats, entries, boundary, saved }) => {
+}> = ({ cf, overrideCats, adjCats, entries, dealValues, boundary, saved }) => {
   // Show the boundary FY's actual months (read-only context) before the editable forecast months.
   const actualMonths = cf.columns
     .filter((c) => !c.isForecast && fiscalYearOf(c.month) === fiscalYearOf(boundary))
@@ -102,6 +103,22 @@ export const ForecastGridPage: FC<{
                   </tr>
                 ))}
                 <tr class="group"><td colspan={allMonths.length + 1}>Additional rows — projects, pipeline, once-offs</td></tr>
+                {dealValues && dealValues.size > 0 ? (
+                  <tr>
+                    <td style="text-align:left">
+                      <a href="/app/accounts/deals">Deals — expected payments</a> <span class="badge income">income</span>
+                      <div class="cellhint">read-only · set per deal on the Deals page</div>
+                    </td>
+                    {actualMonths.map((m) => {
+                      const v = dealValues.get(m);
+                      return <td class="num muted">{v ? formatZAR(v) : "—"}</td>;
+                    })}
+                    {months.map((m) => {
+                      const v = dealValues.get(m);
+                      return <td class="num">{v ? formatZAR(v) : ""}</td>;
+                    })}
+                  </tr>
+                ) : null}
                 {adjCats.map((cat) => (
                   <tr>
                     <td style="text-align:left">

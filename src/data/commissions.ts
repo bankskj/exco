@@ -20,6 +20,7 @@ export type Commission = {
   deal_date: string | null;
   invoice_nett: number | null; // the base commission is paid on
   comm_amount: number | null; // explicit override; null = comm_pct x invoice_nett
+  expected_payment: string | null; // when the money is expected to land — feeds the cashflow forecast
 };
 
 /** Effective commission for a deal: explicit amount wins, else % of invoice nett. */
@@ -44,7 +45,7 @@ export type CommissionLine = {
 
 export async function listCommissions(db: D1Database): Promise<Commission[]> {
   const { results } = await db
-    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount FROM commissions ORDER BY COALESCE(deal_date, created_at) DESC")
+    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount, expected_payment FROM commissions ORDER BY COALESCE(deal_date, created_at) DESC")
     .all<Commission>();
   return results ?? [];
 }
@@ -52,8 +53,8 @@ export async function listCommissions(db: D1Database): Promise<Commission[]> {
 export async function createCommission(db: D1Database, c: Partial<Commission> & { staff: string; allocation: string }): Promise<string> {
   const id = uuid();
   await db
-    .prepare("INSERT INTO commissions (id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(id, c.staff, c.allocation, c.client ?? null, c.po_number ?? null, c.comm_pct ?? null, c.stage ?? "quote", c.notes ?? null, c.quote_no ?? null, c.invoice_no ?? null, c.deal_date ?? null, c.invoice_nett ?? null, c.comm_amount ?? null)
+    .prepare("INSERT INTO commissions (id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount, expected_payment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, c.staff, c.allocation, c.client ?? null, c.po_number ?? null, c.comm_pct ?? null, c.stage ?? "quote", c.notes ?? null, c.quote_no ?? null, c.invoice_no ?? null, c.deal_date ?? null, c.invoice_nett ?? null, c.comm_amount ?? null, c.expected_payment ?? null)
     .run();
   return id;
 }
@@ -70,11 +71,11 @@ export async function setCommissionAmounts(db: D1Database, id: string, invoiceNe
 export async function updateCommissionDetails(
   db: D1Database,
   id: string,
-  d: { staff: string; allocation: string; client: string | null; po_number: string | null; quote_no: string | null; invoice_no: string | null; deal_date: string | null },
+  d: { staff: string; allocation: string; client: string | null; po_number: string | null; quote_no: string | null; invoice_no: string | null; deal_date: string | null; expected_payment: string | null },
 ): Promise<void> {
   await db
-    .prepare("UPDATE commissions SET staff=?, allocation=?, client=?, po_number=?, quote_no=?, invoice_no=?, deal_date=?, updated_at=datetime('now') WHERE id=?")
-    .bind(d.staff, d.allocation, d.client, d.po_number, d.quote_no, d.invoice_no, d.deal_date, id)
+    .prepare("UPDATE commissions SET staff=?, allocation=?, client=?, po_number=?, quote_no=?, invoice_no=?, deal_date=?, expected_payment=?, updated_at=datetime('now') WHERE id=?")
+    .bind(d.staff, d.allocation, d.client, d.po_number, d.quote_no, d.invoice_no, d.deal_date, d.expected_payment, id)
     .run();
 }
 

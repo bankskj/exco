@@ -125,7 +125,7 @@ export const CommissionsPage: FC<{
               <thead>
                 <tr>
                   <th style="text-align:left">Allocation</th><th>Date</th><th>Staff</th><th>Client</th>
-                  <th>Quote #</th><th>PO #</th><th>Invoice #</th>
+                  <th>Quote #</th><th>PO #</th><th>Invoice #</th><th>Expected pay</th>
                   <th>Stage</th><th>Invoiced</th><th>Paid</th><th>Invoice nett</th><th>Comm %</th><th>Commission</th><th></th>
                 </tr>
               </thead>
@@ -144,6 +144,7 @@ export const CommissionsPage: FC<{
                     <td class="muted">{d.quote_no || "—"}</td>
                     <td class="muted">{d.po_number || "—"}</td>
                     <td class="muted">{d.invoice_no || "—"}</td>
+                    <td class="muted">{d.expected_payment ? formatDMY(d.expected_payment) : "—"}</td>
                     <td>
                       <form method="post" action="/app/accounts/deals/stage" style="margin:0">
                         <input type="hidden" name="id" value={d.id} />
@@ -184,7 +185,7 @@ export const CommissionsPage: FC<{
                   </tr>
                   {openId === d.id ? (
                     <tr>
-                      <td colspan={14} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={15} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <DealLedger deal={d} lines={linesByDeal.get(d.id) ?? []} />
                       </td>
                     </tr>
@@ -205,6 +206,7 @@ export const CommissionsPage: FC<{
             </div>
             <div><label>Allocation</label><input type="text" name="allocation" required placeholder="e.g. SAP Analyst - Bonus" /></div>
             <div><label>Date</label><DateField name="deal_date" /></div>
+            <div><label>Expected payment</label><DateField name="expected_payment" /></div>
             <div><label>Quote #</label><input type="text" name="quote_no" placeholder="e.g. QU-0012" /></div>
             <div><label>Invoice #</label><input type="text" name="invoice_no" placeholder="e.g. INV-00055" /></div>
             <div><label>Client</label><input type="text" name="client" placeholder="e.g. Illovo" /></div>
@@ -241,6 +243,7 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
           <div><label>Staff (earner)</label><input type="text" name="staff" value={deal.staff} required style="text-align:left" /></div>
           <div><label>Client</label><input type="text" name="client" value={deal.client ?? ""} style="text-align:left" /></div>
           <div><label>Date</label><DateField name="deal_date" value={deal.deal_date ? formatDMY(deal.deal_date) : ""} /></div>
+          <div><label>Expected payment</label><DateField name="expected_payment" value={deal.expected_payment ? formatDMY(deal.expected_payment) : ""} /></div>
           <div><label>Quote #</label><input type="text" name="quote_no" value={deal.quote_no ?? ""} style="text-align:left" /></div>
           <div><label>PO #</label><input type="text" name="po_number" value={deal.po_number ?? ""} style="text-align:left" /></div>
           <div><label>Invoice #</label><input type="text" name="invoice_no" value={deal.invoice_no ?? ""} style="text-align:left" /></div>

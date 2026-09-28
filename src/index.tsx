@@ -509,6 +509,17 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
       adjById.get(e.category_id)?.values.set(e.period, e.amount);
     }
   }
+  // Deals pipeline: unpaid deals with an expected payment date land as forecast income.
+  const deals = await listCommissions(env.DB);
+  const dealValues = new Map<string, number>();
+  for (const d of deals) {
+    if (d.stage === "paid" || !d.expected_payment || d.invoice_nett == null) continue;
+    const m = d.expected_payment.slice(0, 7);
+    dealValues.set(m, (dealValues.get(m) ?? 0) + d.invoice_nett);
+  }
+  if (dealValues.size > 0) {
+    adjRows.push({ id: "__deals__", name: "Deals — expected payments", kind: "income", values: dealValues });
+  }
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
@@ -534,7 +545,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const nowMonth2 = new Date().toISOString().slice(0, 7);
   const bankToday = cf.columns.find((col) => col.month === nowMonth2)?.balance ?? cf.kpis.currentCash;
   const position = { bankToday, debtorsDue, revolving, month: nowMonth2 };
-  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections, position };
+  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections, position, dealValues };
 }
 
 app.get("/app/accounts", async (c) => {
@@ -561,13 +572,13 @@ app.get("/app/accounts/edit", async (c) => {
       await createCategory(c.env.DB, { name, kind: name === "Income" ? "income" : "cost", grp: OVERRIDE_GRP });
     }
   }
-  const { settings, cf, overrideCats, adjCats, entries } = await loadDerived(c.env);
+  const { settings, cf, overrideCats, adjCats, entries, dealValues } = await loadDerived(c.env);
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
     map.get(e.category_id)!.set(e.period, { amount: e.amount, status: "forecast" });
   }
-  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} boundary={settings.actuals_through} saved={c.req.query("saved") === "1"} />);
+  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} dealValues={dealValues} boundary={settings.actuals_through} saved={c.req.query("saved") === "1"} />);
 });
 
 app.post("/app/accounts/save", async (c) => {
@@ -1272,6 +1283,7 @@ app.post("/app/accounts/deals/add", async (c) => {
       quote_no: String(b.quote_no ?? "").trim() || null,
       invoice_no: String(b.invoice_no ?? "").trim() || null,
       deal_date: parseDateInput(String(b.deal_date)),
+      expected_payment: parseDateInput(String(b.expected_payment)),
       invoice_nett: String(b.invoice_nett ?? "").trim() ? parseMoney(String(b.invoice_nett)) : null,
       comm_amount: String(b.comm_amount ?? "").trim() ? parseMoney(String(b.comm_amount)) : null,
     });
@@ -1303,6 +1315,7 @@ app.post("/app/accounts/deals/update", async (c) => {
       quote_no: String(b.quote_no ?? "").trim() || null,
       invoice_no: String(b.invoice_no ?? "").trim() || null,
       deal_date: parseDateInput(String(b.deal_date)),
+      expected_payment: parseDateInput(String(b.expected_payment)),
     });
   }
   return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
