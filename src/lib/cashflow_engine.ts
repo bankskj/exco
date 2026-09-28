@@ -74,8 +74,12 @@ export function buildDerivedCashflow(
   sarsByMonth: Map<string, number> = new Map(),
   activeCtcMonthly = 0, // sum of active employees' CTC — people fallback beyond the grid
 ): DerivedCashflow {
-  const start = s.opening_period;
   const boundary = s.actuals_through; // books complete through (inclusive)
+  // Always cover the boundary's whole fiscal year, even when the balance is
+  // anchored mid-year — earlier months come from actuals, and the running
+  // balance is back-computed so the anchor month still lands exactly.
+  const fyStart = `${fiscalYearOf(boundary) - 1}-03`;
+  const start = s.opening_period < fyStart ? s.opening_period : fyStart;
   const end = addMonths(boundary, Math.max(1, s.horizon_months));
   const months = rangeInclusive(start, end);
 
@@ -92,7 +96,6 @@ export function buildDerivedCashflow(
   // Year-on-year growth: complete months of the boundary's FY vs the same
   // months a year earlier. Applied to last year's same-month actual so the
   // forecast keeps seasonality. Clamped to a sane band.
-  const fyStart = `${fiscalYearOf(boundary) - 1}-03`;
   const clamp = (g: number) => Math.max(-0.5, Math.min(1.0, g));
   const yoyGrowth = (pick: (a: CfActual) => number): number | null => {
     let cur = 0;
@@ -113,7 +116,6 @@ export function buildDerivedCashflow(
   const gOther = yoyGrowth((a) => a.other);
 
   const columns: DerivedColumn[] = [];
-  let balance = s.opening_balance;
   for (const month of months) {
     const isForecast = month > boundary;
     let income: number, people: number, other: number;
@@ -154,12 +156,21 @@ export function buildDerivedCashflow(
     const sars = isForecast ? sarsAvg : sarsByMonth.get(month) ?? 0;
     const cost = people + other + recurring + sars + adjCost;
     const net = income + adjIncome - cost;
-    balance += net;
-    columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, cost, net, balance, incomeSrc, peopleSrc, otherSrc });
+    columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, cost, net, balance: 0, incomeSrc, peopleSrc, otherSrc });
+  }
+
+  // The opening balance is the bank balance at the START of the anchor month;
+  // months shown before it get their balance back-computed from their nets.
+  const preNet = columns.filter((c) => c.month < s.opening_period).reduce((t, c) => t + c.net, 0);
+  const startBalance = s.opening_balance - preNet;
+  let balance = startBalance;
+  for (const c of columns) {
+    balance += c.net;
+    c.balance = balance;
   }
 
   const buildScenario = (name: "base" | "best" | "worst"): DerivedScenario => {
-    let bal = s.opening_balance;
+    let bal = startBalance;
     let lowest = { month: months[0] ?? start, balance: Infinity };
     let runwayMonth: string | null = null;
     const balances = columns.map((c) => {
