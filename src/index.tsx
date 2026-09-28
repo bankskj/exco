@@ -70,7 +70,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, parseDateInput } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, parseDateInput, addMonths } from "./lib/period";
 
 /** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
 function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
@@ -207,12 +207,12 @@ app.get("/app/payroll", async (c) => {
 
 app.get("/app/payroll/capture", async (c) => {
   const { employees, report } = await loadPayroll(c.env.DB);
-  // Default window: the full planning year starting at the first month of data.
-  const defaultFrom = report.periods[0] ?? "2026-01";
+  // Default window: 6 months starting two months back (today Sep → from Jul).
+  const defaultFrom = addMonths(new Date().toISOString().slice(0, 7), -2);
   const fromRaw = c.req.query("from");
   const from = fromRaw && isPeriod(fromRaw) ? fromRaw : defaultFrom;
   const monthsRaw = Number(c.req.query("months"));
-  const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(24, Math.trunc(monthsRaw))) : 14;
+  const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(24, Math.trunc(monthsRaw))) : 6;
   const mRaw = c.req.query("metric");
   const metric = mRaw === "paye" || mRaw === "nett" ? mRaw : "gross";
   const tRaw = c.req.query("type");
