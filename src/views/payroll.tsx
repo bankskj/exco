@@ -365,9 +365,12 @@ export const PayrollCapturePage: FC<{
                         let hint = "";
                         if (metric === "gross" && (!v || v === 0) && eff?.planned) hint = String(eff.gross);
                         if (metric === "paye" && (!v || v === 0) && e.paye_default > 0 && ((c && c.gross > 0) || eff?.planned)) hint = String(e.paye_default);
+                        // A stored gross of 0 is shown as "0" (explicitly paid nothing);
+                        // PAYE zeros stay blank so the default hint shows through.
+                        const shown = v == null ? "" : metric === "gross" && c ? String(v) : v !== 0 ? String(v) : "";
                         return (
                           <td>
-                            <input type="text" inputmode="decimal" name={nm} value={v != null && v !== 0 ? String(v) : ""} placeholder={hint} autocomplete="off" />
+                            <input type="text" inputmode="decimal" name={nm} value={shown} placeholder={hint} autocomplete="off" />
                           </td>
                         );
                       })}

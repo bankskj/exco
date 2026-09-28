@@ -44,7 +44,7 @@ import {
   listEmployees,
   listPayrollEntries,
   upsertPayrollField,
-  pruneEmptyEntries,
+  pruneEntryIfEmpty,
   createEmployee,
   updateEmployee,
   deleteEmployee,
@@ -239,7 +239,6 @@ app.post("/app/payroll/save", async (c) => {
   const cur = new Map<string, number>();
   for (const e of current) cur.set(`${e.employee_id}|${e.period}`, field === "gross" ? e.gross : e.paye);
 
-  let changed = false;
   for (const [key, raw] of Object.entries(body)) {
     if (!key.startsWith(prefix) || typeof raw !== "string") continue;
     const rest = key.slice(2);
@@ -248,14 +247,20 @@ app.post("/app/payroll/save", async (c) => {
     const period = rest.slice(idx + 1);
     if (!isPeriod(period)) continue;
     const trimmed = raw.trim();
+    // A typed 0 is a real value ("paid nothing"); a cleared cell means "no
+    // entry" and returns the cell to the planned prefill.
     const newVal = trimmed === "" ? null : parseMoney(trimmed);
-    const oldVal = cur.get(`${employeeId}|${period}`) ?? 0;
-    if ((newVal ?? 0) === oldVal) continue;
-    if (newVal != null && Math.abs(newVal - oldVal) < 0.005) continue;
+    const hadRow = cur.has(`${employeeId}|${period}`);
+    const oldVal = hadRow ? cur.get(`${employeeId}|${period}`)! : null;
+    if (newVal == null) {
+      if (!hadRow) continue;
+      await upsertPayrollField(c.env.DB, employeeId, period, field, null);
+      await pruneEntryIfEmpty(c.env.DB, employeeId, period);
+      continue;
+    }
+    if (oldVal != null && Math.abs(newVal - oldVal) < 0.005) continue;
     await upsertPayrollField(c.env.DB, employeeId, period, field, newVal);
-    changed = true;
   }
-  if (changed) await pruneEmptyEntries(c.env.DB);
   const keep = new URLSearchParams({ metric: field, saved: "1" });
   if (EMPLOYEE_TYPES.includes(String(body.type) as any)) keep.set("type", String(body.type));
   if (isPeriod(String(body.from))) keep.set("from", String(body.from));

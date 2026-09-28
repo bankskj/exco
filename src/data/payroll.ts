@@ -138,3 +138,14 @@ export async function upsertPayrollField(
 export async function pruneEmptyEntries(db: D1Database): Promise<void> {
   await db.prepare("DELETE FROM payroll_entries WHERE gross = 0 AND paye = 0").run();
 }
+
+/**
+ * Remove one entry only if it is fully zero — used when a cell is cleared,
+ * so an explicitly typed 0 elsewhere survives as a real "paid nothing" row.
+ */
+export async function pruneEntryIfEmpty(db: D1Database, employeeId: string, period: string): Promise<void> {
+  await db
+    .prepare("DELETE FROM payroll_entries WHERE employee_id = ? AND period = ? AND gross = 0 AND paye = 0")
+    .bind(employeeId, period)
+    .run();
+}
