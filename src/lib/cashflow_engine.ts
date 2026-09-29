@@ -72,7 +72,9 @@ export function buildDerivedCashflow(
   overrides: CfOverrides = new Map(),
   adjustments: CfAdjustmentRow[] = [],
   sarsByMonth: Map<string, number> = new Map(),
-  activeCtcMonthly = 0, // sum of active employees' CTC — people fallback beyond the grid
+  // People fallback beyond the grid: CTC total of staff on payroll that month
+  // (per month, so future-dated leavers count until their last paid month).
+  activeCtcFor: (month: string) => number = () => 0,
 ): DerivedCashflow {
   const boundary = s.actuals_through; // books complete through (inclusive)
   // Always cover the boundary's whole fiscal year, even when the balance is
@@ -138,8 +140,9 @@ export function buildDerivedCashflow(
       if (ov.people != null) { people = ov.people; peopleSrc = "manual"; }
       else {
         const p = payrollByMonth.get(month) ?? 0;
+        const ctcMonth = activeCtcFor(month);
         if (p > 0) { people = p; peopleSrc = "payroll"; }
-        else if (activeCtcMonthly > 0) { people = activeCtcMonthly; peopleSrc = "ctc"; }
+        else if (ctcMonth > 0) { people = ctcMonth; peopleSrc = "ctc"; }
         else { people = peopleAvg; peopleSrc = "avg"; }
       }
       if (ov.other != null) { other = ov.other; otherSrc = "manual"; }

@@ -300,9 +300,15 @@ app.post("/app/payroll/employees/save", async (c) => {
     const payeRaw = String(b[`ep_${e.id}`] ?? "").trim();
     const paye_default = payeRaw === "" ? 0 : parseMoney(payeRaw);
     const status = String(b[`es_${e.id}`]) === "inactive" ? "inactive" : "active";
-    // Record the inactive date on the transition; clear it on reactivation.
+    // Last paid month is editable (future months allowed — staff leaving later);
+    // it defaults to the current month on the transition, clears on reactivation.
+    const eiRaw = String(b[`ei_${e.id}`] ?? "").trim();
+    const eiMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(eiRaw) ? eiRaw : null;
     let inactive_date = e.inactive_date;
-    if (status === "inactive" && e.status === "active") inactive_date = new Date().toISOString().slice(0, 10);
+    if (status === "inactive") {
+      if (eiMonth) inactive_date = `${eiMonth}-01`;
+      else if (e.status === "active") inactive_date = new Date().toISOString().slice(0, 10);
+    }
     if (status === "active") inactive_date = null;
     const changed =
       trimmedName !== e.name || type !== e.type || mentor !== (e.mentor ?? null) ||
@@ -489,9 +495,14 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     payrollByMonth.set(pe.period, (payrollByMonth.get(pe.period) ?? 0) + pe.gross);
     payrollCount.set(pe.period, (payrollCount.get(pe.period) ?? 0) + 1);
   }
-  // Fallback people cost beyond the grid: sum of active employees' CTC.
+  // Fallback people cost beyond the grid: CTC of everyone on payroll that
+  // month — active staff plus future-dated leavers until their last month.
   const activeEmps = payrollEmps.filter((e) => e.status === "active");
-  const activeCtcMonthly = activeEmps.reduce((t, e) => t + (e.ctc ?? 0), 0);
+  const activeCtcFor = (month: string): number =>
+    payrollEmps.reduce((t, e) => {
+      const on = e.status === "active" || (e.status === "inactive" && !!e.inactive_date && month <= e.inactive_date.slice(0, 7));
+      return on ? t + (e.ctc ?? 0) : t;
+    }, 0);
   // A partially captured month (fewer than half the active staff, e.g. one
   // early cell) is not a usable people forecast — drop it so the engine
   // falls back to active CTC instead of a near-empty grid total.
@@ -538,7 +549,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
-  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcMonthly);
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor);
   // Collections gap: invoiced (accrual) vs received (cash) per complete month,
   // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
   const debtors = await listCfDebtors(env.DB);

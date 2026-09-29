@@ -220,6 +220,9 @@ export const PayrollCapturePage: FC<{
     .reduce((max, [p]) => (p > max ? p : max), "");
   const isPlanned = (p: string) => p > lastCaptured;
   const cutOff = (e: Employee, p: string) => e.status === "inactive" && !!e.inactive_date && p > e.inactive_date.slice(0, 7);
+  // Still on payroll for this month — active, or leaving later (paid through a future month).
+  const onPayroll = (e: Employee, p: string) =>
+    e.status === "active" || (e.status === "inactive" && !!e.inactive_date && p <= e.inactive_date.slice(0, 7));
   /** The values a cell effectively shows: captured, or the planning prefill. */
   const effective = (e: Employee, p: string): { gross: number; paye: number; planned: boolean } | null => {
     if (cutOff(e, p)) return null;
@@ -228,7 +231,7 @@ export const PayrollCapturePage: FC<{
       const paye = c.paye > 0 ? c.paye : c.gross > 0 ? e.paye_default : 0;
       return { gross: c.gross, paye, planned: false };
     }
-    if (isPlanned(p) && e.status === "active" && e.ctc != null && e.ctc > 0) {
+    if (isPlanned(p) && onPayroll(e, p) && e.ctc != null && e.ctc > 0) {
       return { gross: e.ctc, paye: e.paye_default, planned: true };
     }
     return null;
@@ -463,7 +466,13 @@ const EmployeeManager: FC<{ employees: Employee[] }> = ({ employees }) => (
                   <option value="active" selected={e.status === "active"}>active</option>
                   <option value="inactive" selected={e.status === "inactive"}>inactive</option>
                 </select>
-                {e.status === "inactive" && e.inactive_date ? <div class="cellhint">since {formatDMY(e.inactive_date)}</div> : null}
+                {/* Last paid month — editable, future months allowed for staff leaving later. */}
+                <div class="row" style="gap:6px;align-items:center;margin-top:4px">
+                  <input form="empbulk" type="text" name={`ei_${e.id}`}
+                    value={e.status === "inactive" && e.inactive_date ? e.inactive_date.slice(0, 7) : ""}
+                    placeholder="YYYY-MM" style="width:86px;padding:3px 6px;font-size:11px" />
+                  <span class="cellhint">paid through</span>
+                </div>
               </td>
               <td>
                 <form method="post" action="/app/payroll/employee/delete" style="margin:0"
