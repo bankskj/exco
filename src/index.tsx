@@ -1322,7 +1322,12 @@ async function runXeroSync(env: Bindings): Promise<string> {
 
 app.post("/app/expenses/sync", async (c) => {
   // Optional "back" field returns the user to the page they synced from.
-  const back = String((await c.req.parseBody()).back ?? "") === "accounts" ? "/app/accounts" : "/app/expenses";
+  const backKey = String((await c.req.parseBody()).back ?? "");
+  const back =
+    backKey === "overview" ? "/app"
+    : backKey === "cash" || backKey === "accounts" ? "/app/finance/cash"
+    : backKey === "costs" ? "/app/finance/costs"
+    : "/app/admin";
   try {
     const msg = await runXeroSync(c.env);
     return c.redirect(`${back}?msg=${encodeURIComponent(msg)}`);
