@@ -175,7 +175,7 @@ export const CashflowDerivedPage: FC<{
             <table class="grid">
               <thead>
                 <tr>
-                  <th style="text-align:left">Month</th><th>Income (P&amp;L)</th><th>People (salaries + contractors)</th>
+                  <th style="text-align:left">Month</th><th>Income (cash received)</th><th>People (salaries + contractors)</th>
                   <th>Other expenses</th><th>SARS (cash)</th><th>Recurring (manual)</th><th>Grid adj.</th><th>Net</th><th>Balance</th><th></th>
                 </tr>
               </thead>
@@ -198,7 +198,8 @@ export const CashflowDerivedPage: FC<{
             </table>
           </div>
           <p class="muted" style="font-size:12px;margin-top:8px">
-            Actual months come from Xero's P&amp;L (matches the Income tab); <em>People</em> = salary accounts +
+            Actual months are cash-basis from Xero — money actually received and paid (the invoiced/accrual view
+            that matches Xero's net profit is on the Income tab); <em>People</em> = salary accounts +
             developer/contractor accounts combined, because most of the team is paid on contractor invoices — the
             Payroll grid covers the same people, which is why it drives the forecast (tagged <em>payroll grid</em>;
             months beyond the grid fall back to the 3-month average). Income and other expenses forecast at the
