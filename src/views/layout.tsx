@@ -185,6 +185,7 @@ a.subnav { margin-right: 14px; font-weight: 600; }
 const NAV = [
   { href: "/app", label: "Overview", key: "overview" },
   { href: "/app/finance", label: "Finance", key: "finance" },
+  { href: "/app/projects", label: "Projects", key: "projects" },
   { href: "/app/pipeline", label: "Pipeline", key: "pipeline" },
   { href: "/app/payroll", label: "People", key: "people" },
   { href: "/app/admin", label: "Admin", key: "admin" },

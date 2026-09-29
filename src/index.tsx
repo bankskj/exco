@@ -34,7 +34,7 @@ import { CashLiquidityPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
 import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, setIncludeForecast, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, type PnL, type PnLRow } from "./lib/xero";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, fetchProjects, fetchProjectTasks, type PnL, type PnLRow, type XeroProjectTask } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -46,6 +46,8 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listProjectTasks, listProjectSnapshots } from "./data/projects";
+import { ProjectsPage } from "./views/projects";
 import {
   listEmployees,
   listPayrollEntries,
@@ -237,6 +239,27 @@ app.get("/app/admin/quality", async (c) => {
     actualsError: actualsError || null,
   });
   return c.html(<DataQualityPage checks={checks} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
+});
+
+// ---------- Projects ----------
+
+app.get("/app/projects", async (c) => {
+  const [projects, lastSync, projErr] = await Promise.all([
+    listProjects(c.env.DB),
+    getMeta(c.env.DB, "xero_last_sync"),
+    getMeta(c.env.DB, "xero_projects_error"),
+  ]);
+  const fRaw = String(c.req.query("f") ?? "inprogress");
+  const filter = fRaw === "closed" || fRaw === "all" ? (fRaw as "closed" | "all") : "inprogress";
+  const openId = c.req.query("open")?.trim() || null;
+  const [tasks, snapshots] = openId
+    ? await Promise.all([listProjectTasks(c.env.DB, openId), listProjectSnapshots(c.env.DB, openId)])
+    : [[], []];
+  const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
+  return c.html(
+    <ProjectsPage projects={projects} filter={filter} openId={openId} tasks={tasks} snapshots={snapshots}
+      lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
+  );
 });
 
 // ---------- Payroll ----------
@@ -1275,6 +1298,20 @@ async function runXeroSync(env: Bindings): Promise<string> {
     await setMeta(env.DB, "xero_actuals_error", "");
   } catch (e) {
     await setMeta(env.DB, "xero_actuals_error", e instanceof Error ? e.message : "unknown");
+  }
+  // Xero Projects — lifetime totals, tasks and a monthly snapshot.
+  try {
+    const projects = await fetchProjects(token, tenantId);
+    const allTasks: XeroProjectTask[] = [];
+    for (const p of projects) {
+      allTasks.push(...(await fetchProjectTasks(token, tenantId, p.id)));
+    }
+    await replaceProjects(env.DB, projects);
+    await replaceProjectTasks(env.DB, allTasks);
+    await upsertProjectSnapshots(env.DB, projects, new Date().toISOString().slice(0, 7));
+    await setMeta(env.DB, "xero_projects_error", "");
+  } catch (e) {
+    await setMeta(env.DB, "xero_projects_error", e instanceof Error ? e.message : "unknown");
   }
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
   const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.`;

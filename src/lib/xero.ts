@@ -12,7 +12,7 @@ const REPEATING_URL = "https://api.xero.com/api.xro/2.0/RepeatingInvoices";
 // Repeating bills are invoice-family objects → accounting.invoices.read;
 // contacts.read for embedded vendor names; settings.read for org info;
 // offline_access for refresh tokens.
-export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.reports.profitandloss.read accounting.contacts.read accounting.settings.read";
+export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.reports.profitandloss.read accounting.contacts.read accounting.settings.read projects.read";
 
 export type XeroTokens = {
   access_token: string;
@@ -535,4 +535,103 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
     if (list.length < 100) break;
   }
   return { since, txns };
+}
+
+// ---- Xero Projects ------------------------------------------------------------
+
+export type XeroProject = {
+  id: string;
+  name: string;
+  status: string; // INPROGRESS | CLOSED
+  currency: string;
+  estimate: number | null;
+  minutes_logged: number;
+  task_amount: number; // charge for time/tasks
+  expense_amount: number; // charge for expenses assigned to the project
+  invoiced: number; // projectAmountInvoiced
+  to_be_invoiced: number;
+  deposit: number;
+};
+
+export type XeroProjectTask = {
+  id: string;
+  project_id: string;
+  name: string;
+  charge_type: string; // TIME | FIXED | NON_CHARGEABLE
+  rate: number;
+  minutes: number;
+  amount: number;
+  amount_invoiced: number;
+};
+
+const PROJECTS_URL = "https://api.xero.com/projects.xro/2.0/projects";
+
+function projGet(accessToken: string, tenantId: string) {
+  const hdrs = { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" };
+  return async (url: string): Promise<any> => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch(url, { headers: hdrs });
+      if (res.status === 429) {
+        const wait = Math.min(60, Number(res.headers.get("Retry-After") ?? 10) || 10);
+        await new Promise((r) => setTimeout(r, (wait + 1) * 1000));
+        continue;
+      }
+      if (!res.ok) throw new Error(`Xero Projects ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json();
+    }
+    throw new Error("Xero rate limit: retries exhausted");
+  };
+}
+
+const amt = (v: any): number => Number(v?.value ?? v ?? 0) || 0;
+
+/** All projects (any state) with their lifetime financial totals. */
+export async function fetchProjects(accessToken: string, tenantId: string): Promise<XeroProject[]> {
+  const get = projGet(accessToken, tenantId);
+  const out: XeroProject[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const data = await get(`${PROJECTS_URL}?page=${page}&pageSize=50`);
+    const items = data.items ?? [];
+    for (const p of items) {
+      out.push({
+        id: String(p.projectId),
+        name: String(p.name ?? "Unnamed project"),
+        status: String(p.status ?? ""),
+        currency: String(p.currencyCode ?? "ZAR"),
+        estimate: p.estimate != null ? amt(p.estimate) : null,
+        minutes_logged: Number(p.minutesLogged ?? 0) || 0,
+        task_amount: amt(p.totalTaskAmount),
+        expense_amount: amt(p.totalExpenseAmount),
+        invoiced: amt(p.projectAmountInvoiced ?? p.totalInvoiced),
+        to_be_invoiced: amt(p.taskAmountToBeInvoiced) + amt(p.expenseAmountToBeInvoiced),
+        deposit: amt(p.deposit),
+      });
+    }
+    if (items.length < 50 || page >= Number(data.pagination?.pageCount ?? 1)) break;
+  }
+  return out;
+}
+
+/** Tasks (time items) for one project — expense line items are not exposed by the API. */
+export async function fetchProjectTasks(accessToken: string, tenantId: string, projectId: string): Promise<XeroProjectTask[]> {
+  const get = projGet(accessToken, tenantId);
+  const out: XeroProjectTask[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const data = await get(`${PROJECTS_URL}/${projectId}/tasks?page=${page}&pageSize=50`);
+    const items = data.items ?? [];
+    for (const t of items) {
+      out.push({
+        id: String(t.taskId),
+        project_id: projectId,
+        name: String(t.name ?? ""),
+        charge_type: String(t.chargeType ?? ""),
+        rate: amt(t.rate),
+        minutes: Number(t.totalMinutes ?? 0) || 0,
+        amount: amt(t.totalAmount),
+        amount_invoiced: amt(t.amountInvoiced),
+      });
+    }
+    if (items.length < 50 || page >= Number(data.pagination?.pageCount ?? 1)) break;
+  }
+  return out;
 }
