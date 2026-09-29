@@ -31,8 +31,8 @@ export const ProjectsPage: FC<{
   const charge = (p: XeroProject) => p.task_amount + p.expense_amount;
   const profit = (p: XeroProject) => p.invoiced - charge(p);
   const tot = visible.reduce(
-    (a, p) => ({ charge: a.charge + charge(p), invoiced: a.invoiced + p.invoiced, tbi: a.tbi + p.to_be_invoiced }),
-    { charge: 0, invoiced: 0, tbi: 0 },
+    (a, p) => ({ charge: a.charge + charge(p), invoiced: a.invoiced + p.invoiced }),
+    { charge: 0, invoiced: 0 },
   );
   const open = openId ? projects.find((p) => p.id === openId) ?? null : null;
   const qs = (over: { f?: string; open?: string | null }) => {
@@ -94,7 +94,7 @@ export const ProjectsPage: FC<{
               <Kpi label="Invoiced" value={formatZAR(tot.invoiced)} />
               <Kpi label="Profit" value={formatZAR(tot.invoiced - tot.charge)} tone={tot.invoiced - tot.charge < 0 ? "neg" : "pos"}
                 sub={`${pct(tot.invoiced - tot.charge, tot.invoiced)}% of invoiced`} />
-              <Kpi label="Still to invoice" value={formatZAR(tot.tbi)} tone="warn" sub="work done, not yet billed" />
+              <Kpi label="In progress" value={String(projects.filter((p) => p.status === "INPROGRESS").length)} sub={`${projects.length} project(s) total`} />
             </div>
 
             <div class="section-block">
@@ -103,7 +103,7 @@ export const ProjectsPage: FC<{
                   <thead>
                     <tr>
                       <th style="text-align:left">Project</th><th>Status</th><th>Charge</th><th>Invoiced</th>
-                      <th>Still to invoice</th><th>Profit</th><th>Profit %</th>
+                      <th>Profit</th><th>Profit %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -121,13 +121,12 @@ export const ProjectsPage: FC<{
                             <td>{p.status === "INPROGRESS" ? <span class="badge income">in progress</span> : <span class="badge actual">closed</span>}</td>
                             <td class="num">{formatZAR(charge(p))}</td>
                             <td class="num">{formatZAR(p.invoiced)}</td>
-                            <td class={`num ${p.to_be_invoiced > 0 ? "warn" : "muted"}`}>{p.to_be_invoiced ? formatZAR(p.to_be_invoiced) : "—"}</td>
                             <td class={`num ${pr < 0 ? "neg" : "pos"}`}>{formatZAR(pr)}</td>
                             <td class={`num ${pr < 0 ? "neg" : ""}`}>{p.invoiced ? `${pct(pr, p.invoiced)}%` : "—"}</td>
                           </tr>
                           {isOpen && open ? (
                             <tr>
-                              <td colspan={7} style="text-align:left;background:#0c0f14;padding:16px 20px">
+                              <td colspan={6} style="text-align:left;background:#0c0f14;padding:16px 20px">
                                 <ProjectDrill p={open} tasks={tasks} deltas={deltas} />
                               </td>
                             </tr>
@@ -140,7 +139,6 @@ export const ProjectsPage: FC<{
                       <td></td>
                       <td class="num">{formatZAR(tot.charge)}</td>
                       <td class="num">{formatZAR(tot.invoiced)}</td>
-                      <td class="num">{formatZAR(tot.tbi)}</td>
                       <td class={`num ${tot.invoiced - tot.charge < 0 ? "neg" : "pos"}`}>{formatZAR(tot.invoiced - tot.charge)}</td>
                       <td class="num">{pct(tot.invoiced - tot.charge, tot.invoiced)}%</td>
                     </tr>
@@ -178,7 +176,7 @@ const ProjectDrill: FC<{
       <div class="kpi"><div class="k-label">Time / tasks charge</div><div class="k-value" style="font-size:18px">{formatZAR(p.task_amount)}</div></div>
       <div class="kpi"><div class="k-label">Expenses charge</div><div class="k-value" style="font-size:18px">{formatZAR(p.expense_amount)}</div><div class="k-sub muted">bills assigned to the project</div></div>
       <div class="kpi"><div class="k-label">Invoiced</div><div class="k-value" style="font-size:18px">{formatZAR(p.invoiced)}</div></div>
-      <div class="kpi"><div class="k-label">Still to invoice</div><div class="k-value warn" style="font-size:18px">{formatZAR(p.to_be_invoiced)}</div></div>
+      <div class="kpi"><div class="k-label">Profit</div><div class={`k-value ${p.invoiced - p.task_amount - p.expense_amount < 0 ? "neg" : "pos"}`} style="font-size:18px">{formatZAR(p.invoiced - p.task_amount - p.expense_amount)}</div></div>
     </div>
 
     {tasks.length > 0 ? (
