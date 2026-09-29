@@ -182,13 +182,7 @@ export const ProjectsPage: FC<{
                             <td class={`num ${pr < 0 ? "neg" : "pos"}`}>{formatZAR(pr)}</td>
                             <td class={`num ${pr < 0 ? "neg" : ""}`}>{g.invoiced ? `${pct(pr, g.invoiced)}%` : "—"}</td>
                           </tr>
-                          {isOpen && open ? (
-                            <tr>
-                              <td colspan={6} style="text-align:left;background:#0c0f14;padding:16px 20px">
-                                <GroupDrill g={open} tasks={tasks} deltas={deltas} />
-                              </td>
-                            </tr>
-                          ) : null}
+
                         </>
                       );
                     })}
@@ -212,34 +206,52 @@ export const ProjectsPage: FC<{
           </>
         ) : null}
       </div>
+
+      {open ? (
+        <>
+          <a href={qs({ open: null })} class="drawer-overlay" aria-label="Close details"></a>
+          <aside class="drawer">
+            <div class="row spread" style="align-items:flex-start">
+              <h3 style="text-transform:none;font-size:17px;color:var(--text)">{open.name}</h3>
+              <a href={qs({ open: null })} class="btn btn-sm" title="Close">✕</a>
+            </div>
+            <p class="muted" style="font-size:12px;margin:2px 0 14px">
+              {open.members.length > 1 ? `${open.members.length} Xero projects combined · ` : ""}
+              {open.inProgress > 0 ? `${open.inProgress} in progress` : "closed"} · project-to-date figures
+            </p>
+            <GroupDrill g={open} tasks={tasks} deltas={deltas} />
+          </aside>
+        </>
+      ) : null}
     </Layout>
   );
 };
+
+const Line: FC<{ name: string; value: string; tone?: string; strong?: boolean }> = ({ name, value, tone, strong }) => (
+  <div class="row spread" style={`font-size:${strong ? "15px" : "13px"};${strong ? "font-weight:700;border-top:1px solid var(--border);padding-top:8px;margin-top:8px" : ""}`}>
+    <span class={strong ? "" : "muted"}>{name}</span>
+    <span class={tone ?? ""} style="font-variant-numeric:tabular-nums">{value}</span>
+  </div>
+);
 
 const GroupDrill: FC<{
   g: ProjectGroup;
   tasks: XeroProjectTask[];
   deltas: { month: string; charge: number | null; invoiced: number | null; cumCharge: number; cumInvoiced: number }[];
 }> = ({ g, tasks, deltas }) => {
-  const taskAmount = g.members.reduce((s, p) => s + p.task_amount, 0);
-  const expenseAmount = g.members.reduce((s, p) => s + p.expense_amount, 0);
   const estimate = g.members.reduce((s, p) => s + (p.estimate ?? 0), 0);
   return (
     <div>
-      <div class="row spread" style="margin-bottom:12px">
-        <strong>{g.name} — breakdown{g.members.length > 1 ? ` (${g.members.length} Xero projects combined)` : ""}</strong>
-        <span class="muted" style="font-size:12px">
-          {g.minutes ? `${hours(g.minutes)} logged` : "no time logged"}
-          {estimate > 0 ? ` · estimate ${formatZAR(estimate)}` : ""}
-        </span>
+      <div class="card" style="padding:14px 16px;margin-bottom:16px">
+        <Line name="Charge (bills & spend assigned in Xero)" value={formatZAR(g.charge)} />
+        <Line name="Invoiced" value={formatZAR(g.invoiced)} />
+        {estimate > 0 ? <Line name="Estimate" value={formatZAR(estimate)} /> : null}
+        <Line name="Profit" value={formatZAR(g.invoiced - g.charge)} tone={g.invoiced - g.charge < 0 ? "neg" : "pos"} strong />
       </div>
-
-      <div class="kpis" style="margin-bottom:14px">
-        <div class="kpi"><div class="k-label">Time / tasks charge</div><div class="k-value" style="font-size:18px">{formatZAR(taskAmount)}</div></div>
-        <div class="kpi"><div class="k-label">Expenses charge</div><div class="k-value" style="font-size:18px">{formatZAR(expenseAmount)}</div><div class="k-sub muted">bills assigned to the project</div></div>
-        <div class="kpi"><div class="k-label">Invoiced</div><div class="k-value" style="font-size:18px">{formatZAR(g.invoiced)}</div></div>
-        <div class="kpi"><div class="k-label">Profit</div><div class={`k-value ${g.invoiced - g.charge < 0 ? "neg" : "pos"}`} style="font-size:18px">{formatZAR(g.invoiced - g.charge)}</div></div>
-      </div>
+      <p class="muted" style="font-size:12px;margin:0 0 14px">
+        Charge is the supplier bills and spend assigned to this project in Xero. Xero's API doesn't expose those line
+        items individually — open the project in Xero for document-level detail.
+      </p>
 
       {g.members.length > 1 ? (
         <div style="margin-bottom:14px">
@@ -288,12 +300,6 @@ const GroupDrill: FC<{
             </tbody>
           </table>
           {tasks.length > 20 ? <p class="muted" style="font-size:12px;margin:6px 0 0">Top 20 of {tasks.length} tasks shown.</p> : null}
-          {expenseAmount > 0 ? (
-            <p class="muted" style="font-size:12px;margin:8px 0 0">
-              Plus {formatZAR(expenseAmount)} of expenses (supplier bills and spend assigned in Xero). Xero's API doesn't
-              expose expense line items — open the project in Xero for that detail.
-            </p>
-          ) : null}
         </div>
       ) : null}
 
@@ -305,7 +311,7 @@ const GroupDrill: FC<{
             between months becomes the monthly view. Check back after the next month's syncs.
           </p>
         ) : (
-          <table style="border-collapse:collapse;font-size:13px;min-width:520px;margin-top:6px">
+          <table style="border-collapse:collapse;font-size:12px;width:100%;margin-top:6px">
             <thead>
               <tr>{["Month", "Charge added", "Invoiced added", "Cumulative charge", "Cumulative invoiced"].map((h) => (
                 <th style={`text-align:${h === "Month" ? "left" : "right"};padding:4px 12px 4px 0;color:var(--muted)`}>{h}</th>
