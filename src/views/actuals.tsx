@@ -72,6 +72,17 @@ export const ActualsPage: FC<{
   }
   const months = [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1));
   const tot = months.reduce((a, s) => ({ sales: a.sales + s.sales, out: a.out + s.bills + s.spend }), { sales: 0, out: 0 });
+  // Running balance: cumulative net, oldest month first (within the FY view).
+  const running = new Map<string, number>();
+  let cum = 0;
+  for (const s2 of [...months].sort((a, b) => (a.month < b.month ? -1 : 1))) {
+    cum += s2.sales - s2.bills - s2.spend;
+    running.set(s2.month, cum);
+  }
+  const nets = months.map((s2) => s2.sales - s2.bills - s2.spend);
+  const avgNet = nets.length ? (tot.sales - tot.out) / nets.length : 0;
+  const best = months.length ? months.reduce((a, b) => (a.sales - a.bills - a.spend >= b.sales - b.bills - b.spend ? a : b)) : null;
+  const worst = months.length ? months.reduce((a, b) => (a.sales - a.bills - a.spend <= b.sales - b.bills - b.spend ? a : b)) : null;
   const openRows = open ? txns.filter((t) => t.txn_date.slice(0, 7) === open) : [];
   const qs = (m: string | null) => `/app/accounts/actuals?${fy != null ? `fy=${fy}&` : "fy=all&"}${m ? `m=${m}` : ""}`.replace(/[&?]$/, "");
 
@@ -112,7 +123,11 @@ export const ActualsPage: FC<{
             <div class="kpis section-block">
               <Kpi label="Invoiced (sales)" value={formatZAR(tot.sales)} sub="excl VAT" />
               <Kpi label="Spent (bills + spend money)" value={formatZAR(tot.out)} sub="excl VAT" />
-              <Kpi label="Net" value={formatZAR(tot.sales - tot.out)} tone={tot.sales - tot.out < 0 ? "neg" : "pos"} sub="invoiced − spent" />
+              <Kpi label="Running balance" value={formatZAR(tot.sales - tot.out)} tone={tot.sales - tot.out < 0 ? "neg" : "pos"}
+                sub={`net over ${months.length} month(s) · avg ${formatZAR(avgNet)}/mo`} />
+              <Kpi label="Best month" value={best ? formatZAR(best.sales - best.bills - best.spend) : "—"} tone="pos" sub={best ? label(best.month) : undefined} />
+              <Kpi label="Worst month" value={worst ? formatZAR(worst.sales - worst.bills - worst.spend) : "—"}
+                tone={worst && worst.sales - worst.bills - worst.spend < 0 ? "neg" : ""} sub={worst ? label(worst.month) : undefined} />
             </div>
 
             <div class="card section-block">
@@ -122,7 +137,7 @@ export const ActualsPage: FC<{
                   <thead>
                     <tr>
                       <th style="text-align:left">Month</th><th>Invoiced (sales)</th><th>Supplier bills</th>
-                      <th>Spend money</th><th>Total out</th><th>Net</th><th>Docs</th>
+                      <th>Spend money</th><th>Total out</th><th>Net</th><th>Running</th><th>Docs</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -143,11 +158,12 @@ export const ActualsPage: FC<{
                             <td class="num">{formatZAR(s.spend)}</td>
                             <td class="num">{formatZAR(out)}</td>
                             <td class={`num ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</td>
+                            <td class={`num ${(running.get(s.month) ?? 0) < 0 ? "neg" : ""}`} style="font-weight:600">{formatZAR(running.get(s.month) ?? 0)}</td>
                             <td class="num muted">{s.count}</td>
                           </tr>
                           {isOpen ? (
                             <tr>
-                              <td colspan={7} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                              <td colspan={8} style="text-align:left;background:#0c0f14;padding:14px 18px">
                                 <strong>{label(s.month)}</strong>
                                 <span class="muted" style="font-size:12px"> — {openRows.filter((t) => t.kind === "sale").length} sales invoice(s), {openRows.filter((t) => t.kind !== "sale").length} outgoing</span>
                                 <div style="margin-top:10px"><TxnTable rows={openRows} /></div>
