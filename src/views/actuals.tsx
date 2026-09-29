@@ -9,9 +9,12 @@ type MonthSummary = {
   month: string;
   sales: number; // invoiced (excl VAT)
   bills: number; // supplier bills (excl VAT)
-  spend: number; // spend-money bank txns (excl VAT)
+  spend: number; // spend-money bank txns excl SARS (excl VAT)
+  sars: number; // payments to SARS — VAT portion is not in the P&L
   count: number;
 };
+
+const isSars = (t: ActualTxn) => /^SARS\b/i.test(t.contact) || /\bSARS\b/i.test(String(t.reference ?? ""));
 
 const KIND_LABEL: Record<ActualTxn["kind"], string> = { sale: "Sales invoice", bill: "Supplier bill", spend: "Spend money" };
 
@@ -55,34 +58,37 @@ export const ActualsPage: FC<{
   fy: number | null;
   fys: number[];
   open: string | null; // month being drilled into
+  pnlNet?: Map<string, number>; // accrual P&L net by month (tie-out column)
   lastSync: string | null;
   syncError?: string | null;
-}> = ({ txns, fy, fys, open, lastSync, syncError }) => {
+}> = ({ txns, fy, fys, open, pnlNet, lastSync, syncError }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const byMonth = new Map<string, MonthSummary>();
   for (const t of txns) {
     const m = t.txn_date.slice(0, 7);
     if (!inFy(m)) continue;
-    if (!byMonth.has(m)) byMonth.set(m, { month: m, sales: 0, bills: 0, spend: 0, count: 0 });
+    if (!byMonth.has(m)) byMonth.set(m, { month: m, sales: 0, bills: 0, spend: 0, sars: 0, count: 0 });
     const s = byMonth.get(m)!;
     if (t.kind === "sale") s.sales += t.sub_total;
     else if (t.kind === "bill") s.bills += t.sub_total;
+    else if (isSars(t)) s.sars += t.sub_total;
     else s.spend += t.sub_total;
     s.count++;
   }
   const months = [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1));
-  const tot = months.reduce((a, s) => ({ sales: a.sales + s.sales, out: a.out + s.bills + s.spend }), { sales: 0, out: 0 });
+  const tot = months.reduce((a, s) => ({ sales: a.sales + s.sales, out: a.out + s.bills + s.spend + s.sars }), { sales: 0, out: 0 });
   // Running balance: cumulative net, oldest month first (within the FY view).
   const running = new Map<string, number>();
   let cum = 0;
   for (const s2 of [...months].sort((a, b) => (a.month < b.month ? -1 : 1))) {
-    cum += s2.sales - s2.bills - s2.spend;
+    cum += s2.sales - s2.bills - s2.spend - s2.sars;
     running.set(s2.month, cum);
   }
-  const nets = months.map((s2) => s2.sales - s2.bills - s2.spend);
+  const nets = months.map((s2) => s2.sales - s2.bills - s2.spend - s2.sars);
   const avgNet = nets.length ? (tot.sales - tot.out) / nets.length : 0;
-  const best = months.length ? months.reduce((a, b) => (a.sales - a.bills - a.spend >= b.sales - b.bills - b.spend ? a : b)) : null;
-  const worst = months.length ? months.reduce((a, b) => (a.sales - a.bills - a.spend <= b.sales - b.bills - b.spend ? a : b)) : null;
+  const net1 = (x: MonthSummary) => x.sales - x.bills - x.spend - x.sars;
+  const best = months.length ? months.reduce((a, b) => (net1(a) >= net1(b) ? a : b)) : null;
+  const worst = months.length ? months.reduce((a, b) => (net1(a) <= net1(b) ? a : b)) : null;
   const openRows = open ? txns.filter((t) => t.txn_date.slice(0, 7) === open) : [];
   const qs = (m: string | null) => `/app/accounts/actuals?${fy != null ? `fy=${fy}&` : "fy=all&"}${m ? `m=${m}` : ""}`.replace(/[&?]$/, "");
 
@@ -125,9 +131,9 @@ export const ActualsPage: FC<{
               <Kpi label="Spent (bills + spend money)" value={formatZAR(tot.out)} sub="excl VAT" />
               <Kpi label="Running balance" value={formatZAR(tot.sales - tot.out)} tone={tot.sales - tot.out < 0 ? "neg" : "pos"}
                 sub={`net over ${months.length} month(s) · avg ${formatZAR(avgNet)}/mo`} />
-              <Kpi label="Best month" value={best ? formatZAR(best.sales - best.bills - best.spend) : "—"} tone="pos" sub={best ? label(best.month) : undefined} />
-              <Kpi label="Worst month" value={worst ? formatZAR(worst.sales - worst.bills - worst.spend) : "—"}
-                tone={worst && worst.sales - worst.bills - worst.spend < 0 ? "neg" : ""} sub={worst ? label(worst.month) : undefined} />
+              <Kpi label="Best month" value={best ? formatZAR(net1(best)) : "—"} tone="pos" sub={best ? label(best.month) : undefined} />
+              <Kpi label="Worst month" value={worst ? formatZAR(net1(worst)) : "—"}
+                tone={worst && net1(worst) < 0 ? "neg" : ""} sub={worst ? label(worst.month) : undefined} />
             </div>
 
             <div class="card section-block">
@@ -137,13 +143,14 @@ export const ActualsPage: FC<{
                   <thead>
                     <tr>
                       <th style="text-align:left">Month</th><th>Invoiced (sales)</th><th>Supplier bills</th>
-                      <th>Spend money</th><th>Total out</th><th>Net</th><th>Running</th><th>Docs</th>
+                      <th>Spend money</th><th>SARS (tax)</th><th>Total out</th><th>Net</th><th>P&amp;L net</th><th>Running</th><th>Docs</th>
                     </tr>
                   </thead>
                   <tbody>
                     {months.map((s) => {
-                      const out = s.bills + s.spend;
+                      const out = s.bills + s.spend + s.sars;
                       const net = s.sales - out;
+                      const pl = pnlNet?.get(s.month);
                       const isOpen = open === s.month;
                       return (
                         <>
@@ -156,14 +163,16 @@ export const ActualsPage: FC<{
                             <td class="num">{formatZAR(s.sales)}</td>
                             <td class="num">{formatZAR(s.bills)}</td>
                             <td class="num">{formatZAR(s.spend)}</td>
+                            <td class="num warn">{s.sars ? formatZAR(s.sars) : "—"}</td>
                             <td class="num">{formatZAR(out)}</td>
                             <td class={`num ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</td>
+                            <td class={`num muted ${pl != null && pl < 0 ? "neg" : ""}`}>{pl != null ? formatZAR(pl) : "—"}</td>
                             <td class={`num ${(running.get(s.month) ?? 0) < 0 ? "neg" : ""}`} style="font-weight:600">{formatZAR(running.get(s.month) ?? 0)}</td>
                             <td class="num muted">{s.count}</td>
                           </tr>
                           {isOpen ? (
                             <tr>
-                              <td colspan={8} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                              <td colspan={10} style="text-align:left;background:#0c0f14;padding:14px 18px">
                                 <strong>{label(s.month)}</strong>
                                 <span class="muted" style="font-size:12px"> — {openRows.filter((t) => t.kind === "sale").length} sales invoice(s), {openRows.filter((t) => t.kind !== "sale").length} outgoing</span>
                                 <div style="margin-top:10px"><TxnTable rows={openRows} /></div>
@@ -176,6 +185,11 @@ export const ActualsPage: FC<{
                   </tbody>
                 </table>
               </div>
+              <p class="muted" style="font-size:12px;margin-top:10px">
+                <strong>Net vs P&amp;L net:</strong> Net is the full document picture; the P&amp;L excludes SARS VAT
+                payments (a balance-sheet item — the SARS column here holds both VAT and PAYE settlements) and includes
+                small non-invoice entries (journals, interest). Add the VAT portion of SARS back to Net and the two lines meet.
+              </p>
             </div>
           </>
         )}

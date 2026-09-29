@@ -1203,7 +1203,11 @@ app.get("/app/accounts/actuals", async (c) => {
   const open = /^\d{4}-\d{2}$/.test(String(c.req.query("m"))) ? String(c.req.query("m")) : null;
   const lastSyncIso = await getMeta(c.env.DB, "xero_last_sync");
   const syncError = (await getMeta(c.env.DB, "xero_actuals_error")) || null;
-  return c.html(<ActualsPage txns={txns} fy={fy} fys={fys} open={open} lastSync={lastSyncIso ? formatDMYTime(lastSyncIso) : null} syncError={syncError} />);
+  // Accrual P&L net per month, for the tie-out column.
+  const cfActuals = await listCfActuals(c.env.DB);
+  const pnlNet = new Map<string, number>();
+  for (const [m2, a] of cfActuals) pnlNet.set(m2, a.income_accr - a.staff_accr - a.dev_accr - a.other_accr);
+  return c.html(<ActualsPage txns={txns} fy={fy} fys={fys} open={open} pnlNet={pnlNet} lastSync={lastSyncIso ? formatDMYTime(lastSyncIso) : null} syncError={syncError} />);
 });
 
 // ----- Income dashboard (Xero P&L) -----
