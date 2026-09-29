@@ -100,12 +100,17 @@ export const IncomePage: FC<{
             info="Revenue less expenses. This is earnings, not cash — invoices and bills may be paid later." />
           <Kpi label="Margins" value={`Net ${nm}%`} sub={`Gross margin ${gpm}%`} tone={nm < 0 ? "neg" : ""} info="Net margin = net profit ÷ revenue. Gross margin excludes only cost of sales." />
           {(() => {
-            const monthsDone = pnl.months.length;
-            const runRate = monthsDone ? (net / monthsDone) * 12 : 0;
+            // Run-rate from COMPLETED months only — the current month is partial
+            // and would distort a straight-line projection.
+            const nowMonth = new Date().toISOString().slice(0, 7);
+            const done = pnl.months.map((m, i) => ({ m, i })).filter(({ m }) => m < nowMonth);
+            const netDone = done.reduce((t, { i }) => t + pnl.incomeTotal[i] - pnl.cosTotal[i] - pnl.opexTotal[i], 0);
+            const runRate = done.length ? (netDone / done.length) * 12 : 0;
+            const partial = pnl.months.some((m) => m >= nowMonth);
             return (
               <Kpi label={`Current standing ${fyLabel(fy)}`} value={formatZAR(runRate)} tone={runRate < 0 ? "neg" : "pos"}
-                sub={`full-year run-rate · ${formatZAR(net)} after ${monthsDone} of 12 months`}
-                info="Where the year is heading: profit to date divided by months completed, projected across the full financial year." />
+                sub={`full-year run-rate · ${formatZAR(netDone)} after ${done.length} completed month(s)${partial ? ` · ${label(nowMonth)} in progress excluded` : ""}`}
+                info="Where the year is heading: profit over completed months, projected across the full financial year. The current month is excluded because it is still being invoiced and reconciled." />
             );
           })()}
         </div>
