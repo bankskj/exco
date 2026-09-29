@@ -1,9 +1,9 @@
 import type { FC } from "hono/jsx";
 import { Layout, AsAt, Info, StateBadge } from "./layout";
 import type { XeroProject, XeroProjectTask } from "../lib/xero";
-import type { ProjectSnapshot } from "../data/projects";
+import type { ProjectSnapshot, ProjectItemRow } from "../data/projects";
 import { formatZAR } from "../lib/money";
-import { label } from "../lib/period";
+import { label, formatDMY } from "../lib/period";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -48,9 +48,12 @@ export const ProjectsPage: FC<{
   ledger: boolean; // right-drawer ledger view for the open project
   tasks: XeroProjectTask[]; // tasks across the open group
   snapshots: ProjectSnapshot[]; // month-summed snapshots across the open group
+  items: ProjectItemRow[]; // allocation lines from the Project Financials import
+  itemsMeta: { period: string; at: string; count: number } | null;
+  msg?: string;
   lastSyncLabel: string | null;
   scopeError?: string | null;
-}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, ledger, tasks, snapshots, lastSyncLabel, scopeError }) => {
+}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, ledger, tasks, snapshots, items, itemsMeta, msg, lastSyncLabel, scopeError }) => {
   const valOf = (p: XeroProject) => periodValues?.get(p.id) ?? { charge: charge(p), invoiced: p.invoiced };
   const visible = projects.filter((p) =>
     filter === "all" ? true : filter === "closed" ? p.status !== "INPROGRESS" : p.status === "INPROGRESS",
@@ -100,7 +103,13 @@ export const ProjectsPage: FC<{
             </p>
             <AsAt lastSync={lastSyncLabel} />
           </div>
+          <form method="post" action="/app/projects/import" enctype="multipart/form-data" class="row" style="gap:8px;margin-top:16px">
+            <input type="file" name="file" accept=".xlsx" required style="width:230px;font-size:12px;color:var(--muted)" />
+            <button class="btn btn-sm" type="submit">Import Project Financials</button>
+          </form>
         </div>
+
+        {msg ? <div class="callout section-block">{msg}</div> : null}
 
         {scopeError ? (
           <div class="callout section-block" style="border-left-color:#f6c453">
@@ -223,9 +232,45 @@ export const ProjectsPage: FC<{
               <h3 style="text-transform:none;font-size:17px;color:var(--text)">{open.name} — ledger</h3>
               <a href={qs({ ledger: false })} class="btn btn-sm" title="Close">✕</a>
             </div>
-            <p class="muted" style="font-size:12px;margin:2px 0 14px">
-              Monthly ledger built from sync snapshots{open.members.length > 1 ? `, combined across ${open.members.length} Xero projects` : ""}.
-              Charge and invoiced movement per month, with the running profit.
+            {items.length > 0 ? (
+              <>
+                <p class="muted" style="font-size:12px;margin:2px 0 10px">
+                  Every allocation on this project{itemsMeta ? ` — from the Project Financials import (${itemsMeta.period || "period not stated"}, imported ${formatDMY(itemsMeta.at.slice(0, 10))})` : ""}.
+                </p>
+                <table style="margin-bottom:18px">
+                  <thead>
+                    <tr><th>Item</th><th style="text-align:right">Cost</th><th style="text-align:right">Invoiced</th></tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => (
+                      <tr>
+                        <td>
+                          {it.item_name || "—"}
+                          <div class="cellhint">{it.contact}{it.item_type ? ` · ${it.item_type.toLowerCase()}` : ""}</div>
+                        </td>
+                        <td class="num">{it.charge || it.cost ? formatZAR(it.charge || it.cost) : "—"}</td>
+                        <td class="num">{it.invoiced ? formatZAR(it.invoiced) : "—"}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td style="font-weight:700">Total ({items.length} lines)</td>
+                      <td class="num" style="font-weight:700">{formatZAR(items.reduce((s2, it) => s2 + (it.charge || it.cost), 0))}</td>
+                      <td class="num" style="font-weight:700">{formatZAR(items.reduce((s2, it) => s2 + it.invoiced, 0))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <div class="callout" style="margin:2px 0 16px">
+                No allocation lines yet. Xero's API doesn't expose them — export <strong>Reports → Project
+                Financials</strong> as Excel and use <strong>Import Project Financials</strong> at the top of this page;
+                the full transaction list will appear here.
+              </div>
+            )}
+
+            <strong style="font-size:13px">Monthly movement</strong>
+            <p class="muted" style="font-size:12px;margin:2px 0 10px">
+              From sync snapshots{open.members.length > 1 ? `, combined across ${open.members.length} Xero projects` : ""}.
             </p>
             {deltas.length === 0 ? (
               <p class="muted" style="font-size:13px">No snapshots recorded yet — run a Xero sync.</p>
@@ -249,9 +294,8 @@ export const ProjectsPage: FC<{
                 </tbody>
               </table>
             )}
-            <p class="muted" style="font-size:12px;margin-top:12px">
-              The opening line carries all history up to the first snapshot; each later line is that month's movement.
-              History accumulates automatically with every monthly sync.
+            <p class="muted" style="font-size:12px;margin-top:10px">
+              The opening line carries all history up to the first snapshot; later lines are monthly movement.
             </p>
           </aside>
         </>

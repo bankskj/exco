@@ -46,7 +46,8 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
-import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots } from "./data/projects";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, replaceProjectItems, listProjectItems } from "./data/projects";
+import { parseProjectFinancials } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
 import {
   listEmployees,
@@ -313,15 +314,34 @@ app.get("/app/projects", async (c) => {
   const ledgerFlag = c.req.query("ledger") === "1";
   // Same-named projects are grouped — load detail across every member.
   const memberIds = openName ? projects.filter((p) => p.name.trim() === openName).map((p) => p.id) : [];
-  const [tasks, snapshots] = openName
-    ? await Promise.all([listTasksForProjects(c.env.DB, memberIds), listSnapshotsForProjects(c.env.DB, memberIds)])
-    : [[], []];
+  const [tasks, snapshots, items] = openName
+    ? await Promise.all([listTasksForProjects(c.env.DB, memberIds), listSnapshotsForProjects(c.env.DB, memberIds), listProjectItems(c.env.DB, openName)])
+    : [[], [], []];
+  const itemsMetaRaw = await getMeta(c.env.DB, "project_items_meta");
+  let itemsMeta: { period: string; at: string; count: number } | null = null;
+  try { itemsMeta = itemsMetaRaw ? JSON.parse(itemsMetaRaw) : null; } catch { itemsMeta = null; }
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
     <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodLabel={periodLabel}
       baselineMissing={baselineMissing} openName={openName} ledger={ledgerFlag} tasks={tasks} snapshots={snapshots}
+      items={items} itemsMeta={itemsMeta} msg={c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
   );
+});
+
+app.post("/app/projects/import", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const f = body.file;
+    if (!(f instanceof File) || f.size === 0) throw new Error("choose the .xlsx export first");
+    if (f.size > 8 * 1024 * 1024) throw new Error("file too large");
+    const { period, items } = await parseProjectFinancials(await f.arrayBuffer());
+    if (items.length === 0) throw new Error("no allocation lines found — export 'Project Financials' from Xero as Excel");
+    await replaceProjectItems(c.env.DB, items, period);
+    return c.redirect(`/app/projects?msg=${encodeURIComponent(`Imported ${items.length} allocation line(s)${period ? ` for the period ${period}` : ""}.`)}`);
+  } catch (e) {
+    return c.redirect(`/app/projects?msg=${encodeURIComponent(`Import failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
+  }
 });
 
 // ---------- Payroll ----------

@@ -88,3 +88,34 @@ export async function listAllSnapshots(db: D1Database): Promise<ProjectSnapshot[
     .all<ProjectSnapshot>();
   return results ?? [];
 }
+
+export type ProjectItemRow = {
+  project_name: string;
+  contact: string;
+  item_type: string;
+  item_name: string;
+  cost: number;
+  charge: number;
+  invoiced: number;
+};
+
+export async function replaceProjectItems(db: D1Database, items: ProjectItemRow[], period: string): Promise<void> {
+  await db.prepare("DELETE FROM xero_project_items").run();
+  const stmt = db.prepare(
+    "INSERT INTO xero_project_items (project_name, contact, item_type, item_name, cost, charge, invoiced) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  for (let i = 0; i < items.length; i += 40) {
+    const chunk = items.slice(i, i + 40).map((t) => stmt.bind(t.project_name, t.contact, t.item_type, t.item_name, t.cost, t.charge, t.invoiced));
+    if (chunk.length) await db.batch(chunk);
+  }
+  const meta = JSON.stringify({ period, at: new Date().toISOString(), count: items.length });
+  await db.prepare("INSERT INTO app_meta (key, value) VALUES ('project_items_meta', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(meta).run();
+}
+
+export async function listProjectItems(db: D1Database, projectName: string): Promise<ProjectItemRow[]> {
+  const { results } = await db
+    .prepare("SELECT project_name, contact, item_type, item_name, cost, charge, invoiced FROM xero_project_items WHERE project_name = ? ORDER BY charge DESC, invoiced DESC")
+    .bind(projectName)
+    .all<ProjectItemRow>();
+  return results ?? [];
+}
