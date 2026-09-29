@@ -184,7 +184,13 @@ export const ProjectsPage: FC<{
                             <td class={`num ${pr < 0 ? "neg" : "pos"}`}>{formatZAR(pr)}</td>
                             <td class={`num ${pr < 0 ? "neg" : ""}`}>{g.invoiced ? `${pct(pr, g.invoiced)}%` : "—"}</td>
                           </tr>
-
+                          {isOpen && open ? (
+                            <tr>
+                              <td colspan={6} style="text-align:left;background:#0c0f14;padding:16px 20px">
+                                <GroupDrill g={open} tasks={tasks} ledgerHref={qs({ ledger: true })} />
+                              </td>
+                            </tr>
+                          ) : null}
                         </>
                       );
                     })}
