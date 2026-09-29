@@ -133,18 +133,20 @@ app.get("/app", async (c) => {
 
 app.get("/app/finance", async (c) => {
   const { derived, snapshot } = await loadSnapshot(c.env);
-  // FY-to-date cash movement and invoicing, from the same canonical store.
+  // FY-to-date cash movement and invoicing over the SAME completed-month
+  // window as the profit block, so the bridge compares like-for-like.
   const fyStart = snapshot.profit.periodStart;
+  const fyEnd = snapshot.profit.periodEnd;
   let cashReceivedFy = 0;
   let cashPaidFy = 0;
   let invoicedFy = 0;
   for (const [m, a] of derived.actuals) {
-    if (m < fyStart || m > snapshot.boundary) continue;
+    if (m < fyStart || m > fyEnd) continue;
     cashReceivedFy += a.income;
     invoicedFy += a.income_accr;
   }
   for (const col of derived.cf.columns) {
-    if (col.month < fyStart || col.month > snapshot.boundary) continue;
+    if (col.month < fyStart || col.month > fyEnd) continue;
     cashPaidFy += col.cost;
   }
   return c.html(

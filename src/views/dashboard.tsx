@@ -62,11 +62,11 @@ export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: st
             <div class="muted">Raised in the last 30 days: {formatZAR(s.receivables.dueSoon)}</div>
           </Big>
 
-          <Big href="/app/finance/pnl" label={`Profit ${fyLabel(s.profit.fy)} to date`} badge="actual"
+          <Big href="/app/finance/pnl" label={`Profit ${fyLabel(s.profit.fy)}`} badge="actual"
             value={formatZAR(s.profit.netProfit)} tone={s.profit.netProfit < 0 ? "neg" : "pos"}
-            info={`Revenue earned less expenses recorded in Xero, ${label(s.profit.periodStart)}–${label(s.profit.periodEnd)}. Not cash — invoices and bills may be paid later.`}>
+            info={`Revenue earned less expenses recorded in Xero over completed months (${label(s.profit.periodStart)}–${label(s.profit.periodEnd)}). The current month is excluded while it is still being invoiced and reconciled. Not cash — invoices and bills may be paid later.`}>
             <div class="muted">{s.profit.netMarginPct}% net margin · revenue {formatZAR(s.profit.revenue)}</div>
-            <div class="muted">books complete through {label(s.boundary)}</div>
+            <div class="muted">{label(s.profit.periodStart)} – {label(s.profit.periodEnd)} · completed months only</div>
           </Big>
 
           <Big href="/app/finance/forecast" label="Forecast cash low point" badge="forecast"

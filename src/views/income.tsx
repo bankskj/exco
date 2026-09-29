@@ -108,9 +108,9 @@ export const IncomePage: FC<{
             const runRate = done.length ? (netDone / done.length) * 12 : 0;
             const partial = pnl.months.some((m) => m >= nowMonth);
             return (
-              <Kpi label={`Current standing ${fyLabel(fy)}`} value={formatZAR(runRate)} tone={runRate < 0 ? "neg" : "pos"}
-                sub={`full-year run-rate · ${formatZAR(netDone)} after ${done.length} completed month(s)${partial ? ` · ${label(nowMonth)} in progress excluded` : ""}`}
-                info="Where the year is heading: profit over completed months, projected across the full financial year. The current month is excluded because it is still being invoiced and reconciled." />
+              <Kpi label={`Current standing ${fyLabel(fy)}`} value={formatZAR(netDone)} tone={netDone < 0 ? "neg" : "pos"}
+                sub={`actual profit, ${done.length} completed month(s)${partial ? ` (${label(nowMonth)} in progress excluded)` : ""} · run-rate ${formatZAR(runRate)}/yr`}
+                info="Actual accrual profit over completed months — no projection. The current month is excluded while it is still being invoiced and reconciled; the run-rate in the subtitle is the straight-line full-year pace." />
             );
           })()}
         </div>

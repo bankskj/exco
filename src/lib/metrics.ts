@@ -102,15 +102,18 @@ export function buildSnapshot(i: SnapshotInputs): Snapshot {
   const nowMonth = now.toISOString().slice(0, 7);
   const nowDate = now.toISOString().slice(0, 10);
 
-  // ---- Profit (accrual P&L through the books-complete boundary; matches Xero)
-  const fy = fiscalYearOf(i.boundary);
+  // ---- Profit (accrual P&L, completed months only — the in-progress month is
+  // still being invoiced/reconciled and would distort the standing)
+  const lastCompleted = addMonths(nowMonth, -1);
+  const profitEnd = i.boundary < lastCompleted ? i.boundary : lastCompleted;
+  const fy = fiscalYearOf(profitEnd);
   const fyStart = `${fy - 1}-03`;
   let revenue = 0;
   let expenses = 0;
   let lossMonths = 0;
   let monthsCounted = 0;
   for (const [m, a] of i.actuals) {
-    if (m < fyStart || m > i.boundary) continue;
+    if (m < fyStart || m > profitEnd) continue;
     const exp = a.staff_accr + a.dev_accr + a.other_accr;
     revenue += a.income_accr;
     expenses += exp;
@@ -190,7 +193,7 @@ export function buildSnapshot(i: SnapshotInputs): Snapshot {
     profit: {
       fy,
       periodStart: fyStart,
-      periodEnd: i.boundary,
+      periodEnd: profitEnd,
       revenue,
       expenses,
       netProfit,
