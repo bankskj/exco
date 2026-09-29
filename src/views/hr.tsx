@@ -220,9 +220,10 @@ export const HrEmployeePage: FC<{
   emp: HrEmployee;
   notes: HrNote[];
   docs: Map<string, HrDocument[]>;
+  payroll?: { status: string; paidThrough: string | null } | null; // matched payroll record
   now: Date;
   saved?: boolean;
-}> = ({ emp, notes, docs, now, saved }) => {
+}> = ({ emp, notes, docs, payroll, now, saved }) => {
   const t = tenure(emp, now);
   const warnings = notes.filter((n) => n.kind === "verbal_warning" || n.kind === "written_warning").length;
   return (
@@ -242,6 +243,10 @@ export const HrEmployeePage: FC<{
         <div class="kpis section-block">
           <Kpi label="Started" value={fmtDate(emp.start_date)} />
           <Kpi label="Tenure" value={t.label} sub={emp.end_date ? "at leaving" : "and counting"} />
+          {payroll ? (
+            <Kpi label="Payroll" value={payroll.paidThrough ? `Paid through ${payroll.paidThrough}` : "Active"}
+              tone={payroll.paidThrough ? "warn" : "pos"} sub="from the Payroll register" />
+          ) : null}
           <Kpi label="File entries" value={String(notes.length)} />
           <Kpi label="Warnings" value={String(warnings)} tone={warnings > 0 ? "neg" : ""} />
         </div>

@@ -777,7 +777,16 @@ app.get("/app/hr/:id", async (c) => {
   if (!emp) return c.redirect("/app/hr");
   const notes = await listNotes(c.env.DB, emp.id);
   const docs = await documentsForNotes(c.env.DB, notes.map((n) => n.id));
-  return c.html(<HrEmployeePage emp={emp} notes={notes} docs={docs} now={new Date()} saved={c.req.query("saved") === "1"} />);
+  // Payroll link: payroll uses first names, HR full names — match on the
+  // first name and skip when it's ambiguous.
+  const payrollEmps = await listEmployees(c.env.DB);
+  const first = emp.name.trim().split(/\s+/)[0].toLowerCase();
+  const matches = payrollEmps.filter((pe) => pe.name.trim().toLowerCase() === first);
+  const pay = matches.length === 1 ? matches[0] : null;
+  const payroll = pay
+    ? { status: pay.status, paidThrough: pay.status === "inactive" && pay.inactive_date ? label(pay.inactive_date.slice(0, 7)) : null }
+    : null;
+  return c.html(<HrEmployeePage emp={emp} notes={notes} docs={docs} payroll={payroll} now={new Date()} saved={c.req.query("saved") === "1"} />);
 });
 
 app.post("/app/hr/:id/update", async (c) => {
