@@ -85,9 +85,9 @@ export const ForecastGridPage: FC<{
           <div>
             <h1 style="margin-top:12px">Accounts · Forecast grid</h1>
             <p class="muted" style="margin-top:0">
-              Actuals through <strong>{label(boundary)}</strong> shown for context. Later months are the model's
-              forecast (tag shows the source); type a value to override it. Additional rows add on top — e.g.
-              outstanding project income.
+              Cash basis — money received and paid, the same numbers as the Cashflow dashboard (the accrual P&L
+              matching Xero lives on the Income tab). Actuals through <strong>{label(boundary)}</strong>; later months
+              are the model's forecast (tag shows the source) — type a value to override it. Additional rows add on top.
             </p>
           </div>
           <a class="btn btn-sm" href="/app/accounts">← Cashflow dashboard</a>
@@ -115,7 +115,10 @@ export const ForecastGridPage: FC<{
                 <tr class="group"><td colspan={allMonths.length + 1}>Income / People / Other — actuals, then forecast (type to override; blank = model)</td></tr>
                 {overrideCats.map((cat) => (
                   <tr>
-                    <td style="text-align:left">{cat.name}</td>
+                    <td style="text-align:left">
+                      {cat.name}
+                      <div class="cellhint">{rowKind(cat.name) === "income" ? "cash received — invoiced view is on the Income tab" : rowKind(cat.name) === "people" ? "salaries + contractors paid" : "other operating costs paid"}</div>
+                    </td>
                     {actualMonths.map((m) => (
                       <td class="num muted">
                         {formatZAR(modelValue(cat.name, m))}<span class="cellhint"> actual</span>
@@ -133,6 +136,30 @@ export const ForecastGridPage: FC<{
                     })}
                   </tr>
                 ))}
+                <tr>
+                  <td style="text-align:left">
+                    SARS (cash)
+                    <div class="cellhint">VAT/PAYE settlements — cash out, not in the P&L</div>
+                  </td>
+                  {allMonths.map((m) => {
+                    const c = colByMonth.get(m);
+                    return (
+                      <td class={`num ${c?.isForecast ? "" : "muted"}`}>
+                        {c ? formatZAR(c.sars) : ""}{c?.isForecast ? <span class="cellhint"> avg</span> : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td style="text-align:left">
+                    Recurring (manual)
+                    <div class="cellhint">tracked on the Expenses tab — outside Xero</div>
+                  </td>
+                  {allMonths.map((m) => {
+                    const c = colByMonth.get(m);
+                    return <td class={`num ${c?.isForecast ? "" : "muted"}`}>{c ? formatZAR(c.recurring) : ""}</td>;
+                  })}
+                </tr>
                 <tr class="group"><td colspan={allMonths.length + 1}>Additional rows — projects, pipeline, once-offs</td></tr>
                 {dealValues && dealValues.size > 0 ? (
                   <tr>
