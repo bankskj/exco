@@ -86,6 +86,11 @@ h3 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; t
 .kpi .k-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
 .kpi .k-value { font-size: 24px; font-weight: 700; margin-top: 6px; }
 .kpi .k-sub { font-size: 12px; margin-top: 4px; }
+.kpis.compact { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 860px) { .kpis.compact { grid-template-columns: repeat(5, 1fr); } }
+.kpis.compact .kpi { padding: 12px 14px; }
+.kpis.compact .k-value { font-size: 18px; }
+.kpis.compact .k-sub { font-size: 11px; }
 .pos { color: var(--accent-2); } .neg { color: var(--danger); } .warn { color: #f6c453; }
 
 /* Tables */

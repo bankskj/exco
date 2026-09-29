@@ -93,12 +93,21 @@ export const IncomePage: FC<{
 
         {error ? <div class="callout section-block" style="border-left-color:var(--danger)">{error}</div> : null}
 
-        <div class="kpis section-block">
+        <div class="kpis compact section-block">
           <Kpi label="Revenue" value={formatZAR(revenue)} {...deltaSub(revenue, pRevenue)} info="Everything invoiced and earned this FY, whether or not it has been paid yet." />
           <Kpi label="Operating expenses" value={formatZAR(expenses)} {...(() => { const d = deltaSub(expenses, pExpenses); return { sub: d.sub, tone: d.tone === "pos" ? "neg" : d.tone === "neg" ? "pos" : "" }; })()} info="All costs recorded in Xero for the period — cost of sales plus overheads." />
           <Kpi label="Net profit" value={formatZAR(net)} tone={net < 0 ? "neg" : "pos"} sub={pNet != null ? `prior year: ${formatZAR(pNet)}` : undefined}
             info="Revenue less expenses. This is earnings, not cash — invoices and bills may be paid later." />
           <Kpi label="Margins" value={`Net ${nm}%`} sub={`Gross margin ${gpm}%`} tone={nm < 0 ? "neg" : ""} info="Net margin = net profit ÷ revenue. Gross margin excludes only cost of sales." />
+          {(() => {
+            const monthsDone = pnl.months.length;
+            const runRate = monthsDone ? (net / monthsDone) * 12 : 0;
+            return (
+              <Kpi label={`Current standing ${fyLabel(fy)}`} value={formatZAR(runRate)} tone={runRate < 0 ? "neg" : "pos"}
+                sub={`full-year run-rate · ${formatZAR(net)} after ${monthsDone} of 12 months`}
+                info="Where the year is heading: profit to date divided by months completed, projected across the full financial year." />
+            );
+          })()}
         </div>
 
         <div class="card section-block">
