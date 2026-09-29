@@ -508,7 +508,7 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
   };
 
   for (const type of ["ACCREC", "ACCPAY"] as const) {
-    for (let page = 1; page <= 30; page++) {
+    for (let page = 1; page <= 60; page++) {
       const q = new URLSearchParams({
         where: `Type=="${type}" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
         page: String(page),
@@ -521,7 +521,8 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
       if (list.length < 100) break;
     }
   }
-  for (let page = 1; page <= 30; page++) {
+  // Bank feeds are dense (~300 rows/month) — page until the window is done.
+  for (let page = 1; page <= 150; page++) {
     const q = new URLSearchParams({
       where: `Type=="SPEND" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
       page: String(page),
