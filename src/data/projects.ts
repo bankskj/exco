@@ -60,3 +60,24 @@ export async function listProjectSnapshots(db: D1Database, projectId: string): P
     .all<ProjectSnapshot>();
   return results ?? [];
 }
+
+export async function listTasksForProjects(db: D1Database, ids: string[]): Promise<XeroProjectTask[]> {
+  if (ids.length === 0) return [];
+  const marks = ids.map(() => "?").join(",");
+  const { results } = await db
+    .prepare(`SELECT id, project_id, name, charge_type, rate, minutes, amount, amount_invoiced FROM xero_project_tasks WHERE project_id IN (${marks}) ORDER BY amount DESC`)
+    .bind(...ids)
+    .all<XeroProjectTask>();
+  return results ?? [];
+}
+
+/** Snapshots summed across a set of projects (a same-name group), by month. */
+export async function listSnapshotsForProjects(db: D1Database, ids: string[]): Promise<ProjectSnapshot[]> {
+  if (ids.length === 0) return [];
+  const marks = ids.map(() => "?").join(",");
+  const { results } = await db
+    .prepare(`SELECT 'group' AS project_id, month, SUM(charge) AS charge, SUM(invoiced) AS invoiced FROM xero_project_snapshots WHERE project_id IN (${marks}) GROUP BY month ORDER BY month`)
+    .bind(...ids)
+    .all<ProjectSnapshot>();
+  return results ?? [];
+}

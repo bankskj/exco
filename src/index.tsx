@@ -46,7 +46,7 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
-import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listProjectTasks, listProjectSnapshots } from "./data/projects";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects } from "./data/projects";
 import { ProjectsPage } from "./views/projects";
 import {
   listEmployees,
@@ -254,13 +254,15 @@ app.get("/app/projects", async (c) => {
   ]);
   const fRaw = String(c.req.query("f") ?? "inprogress");
   const filter = fRaw === "closed" || fRaw === "all" ? (fRaw as "closed" | "all") : "inprogress";
-  const openId = c.req.query("open")?.trim() || null;
-  const [tasks, snapshots] = openId
-    ? await Promise.all([listProjectTasks(c.env.DB, openId), listProjectSnapshots(c.env.DB, openId)])
+  const openName = c.req.query("open")?.trim() || null;
+  // Same-named projects are grouped — load detail across every member.
+  const memberIds = openName ? projects.filter((p) => p.name.trim() === openName).map((p) => p.id) : [];
+  const [tasks, snapshots] = openName
+    ? await Promise.all([listTasksForProjects(c.env.DB, memberIds), listSnapshotsForProjects(c.env.DB, memberIds)])
     : [[], []];
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
-    <ProjectsPage projects={projects} filter={filter} openId={openId} tasks={tasks} snapshots={snapshots}
+    <ProjectsPage projects={projects} filter={filter} openName={openName} tasks={tasks} snapshots={snapshots}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
   );
 });
