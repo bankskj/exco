@@ -44,10 +44,12 @@ export const CashLiquidityPage: FC<{
   fundingMonth: string | null;
   next30Net: number;
   receivablesOutstanding: number;
+  commissionOwed: number;
   syncNote?: string;
   lastSync?: string | null;
   msg?: string;
-}> = ({ cf, settings, fy, fys, bankEstimate, facility, liquidity, risk, fundingMonth, next30Net, receivablesOutstanding, syncNote, lastSync, msg }) => {
+}> = ({ cf, settings, fy, fys, bankEstimate, facility, liquidity, risk, fundingMonth, next30Net, receivablesOutstanding, commissionOwed, syncNote, lastSync, msg }) => {
+  const walkAway = bankEstimate + receivablesOutstanding - facility.used - commissionOwed;
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const visible = cf.columns.filter((c) => inFy(c.month));
   const boundary = settings.actuals_through;
@@ -101,6 +103,9 @@ export const CashLiquidityPage: FC<{
           <Kpi label="Next 30 days" badge="forecast" value={formatZAR(next30Net)} tone={next30Net < 0 ? "neg" : "pos"}
             sub="expected receipts − expected payments"
             info="The next forecast month's net cash movement, from the Forecast model." />
+          <Kpi label="Walk-away balance" badge="estimate" value={formatZAR(walkAway)} tone={walkAway < 0 ? "neg" : "pos"}
+            sub="bank + invoices owed − facility − staff commission"
+            info="Where we'd stand right now if every outstanding customer invoice was collected, the facility settled and owed commission paid out. The full calculation is at the bottom of this page." />
         </div>
 
         <div class="card section-block">
@@ -165,15 +170,15 @@ export const CashLiquidityPage: FC<{
 
         <div class="card section-block">
           <div class="row spread">
-            <h3 style="margin:0">Net cash position — the calculation, shown in full</h3>
+            <h3 style="margin:0">Walk-away balance — the calculation, shown in full</h3>
             <span class="muted" style="font-size:12px">analytic view — debtors are not cash until collected</span>
           </div>
           <div class="kpis" style="margin-top:14px">
             <div class="kpi"><div class="k-label">Bank balance <StateBadge state="estimate" /></div><div class={`k-value ${bankEstimate < 0 ? "neg" : "pos"}`}>{formatZAR(bankEstimate)}</div><div class="k-sub muted">anchored {label(settings.opening_period)} at {formatZAR(settings.opening_balance)}</div></div>
             <div class="kpi"><div class="k-label">+ Amount owed by customers</div><div class="k-value warn">{formatZAR(receivablesOutstanding)}</div><div class="k-sub muted"><a href="/app/finance/receivables">open invoices</a> — credit notes not netted</div></div>
             <div class="kpi"><div class="k-label">− Credit facility used</div><div class="k-value neg">{formatZAR(facility.used)}</div><div class="k-sub muted">owed on the access facility</div></div>
-            {(() => { const net = bankEstimate + receivablesOutstanding - facility.used;
-              return <div class="kpi"><div class="k-label">= Net cash position</div><div class={`k-value ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</div><div class="k-sub muted">only if every debtor pays and the facility is settled</div></div>; })()}
+            <div class="kpi"><div class="k-label">− Commission owed to staff</div><div class="k-value neg">{formatZAR(commissionOwed)}</div><div class="k-sub muted"><a href="/app/pipeline">invoiced/paid deals</a></div></div>
+            <div class="kpi"><div class="k-label">= Walk-away balance</div><div class={`k-value ${walkAway < 0 ? "neg" : "pos"}`}>{formatZAR(walkAway)}</div><div class="k-sub muted">only if every debtor pays, the facility is settled and commission paid</div></div>
           </div>
         </div>
       </div>

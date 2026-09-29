@@ -39,6 +39,7 @@ export const ForecastPage: FC<{
   adjCats: CFCategory[]; // user-defined additional rows
   entries: EntryMap;
   dealValues?: Map<string, number>; // pipeline income from deals' expected payment dates (read-only)
+  dealCommValues?: Map<string, number>; // commission owed to staff on those deals (read-only cost)
   boundary: string;
   tab: ForecastTab;
   facility: { used: number; limit: number | null };
@@ -46,7 +47,7 @@ export const ForecastPage: FC<{
   lastSync?: string | null;
   line?: string; // open the details drawer for this row key
   saved?: boolean;
-}> = ({ cf, settings, overrideCats, adjCats, entries, dealValues, boundary, tab, facility, bankEstimate, lastSync, line, saved }) => {
+}> = ({ cf, settings, overrideCats, adjCats, entries, dealValues, dealCommValues, boundary, tab, facility, bankEstimate, lastSync, line, saved }) => {
   // Show the boundary FY's actual months (read-only context) before the editable forecast months.
   const actualMonths = cf.columns
     .filter((c) => !c.isForecast && fiscalYearOf(c.month) === fiscalYearOf(boundary))
@@ -252,6 +253,16 @@ export const ForecastPage: FC<{
                     ))}
                     <tr class="group"><td colspan={allMonths.length + 1}>People</td></tr>
                     <OverrideRow k="people" title="Employees & contractors" hint="from the Payroll capture grid, then active-staff CTC" />
+                    {dealCommValues && dealCommValues.size > 0 ? (
+                      <tr>
+                        <td style="text-align:left">
+                          <a href="/app/pipeline">Commission owed (deals)</a> <span class="badge cost">cost</span>
+                          <div class="cellhint">read-only · pays out in the deal's expected payment month</div>
+                        </td>
+                        {actualMonths.map((m) => <td class="num muted">{dealCommValues.get(m) ? formatZAR(dealCommValues.get(m)!) : "—"}</td>)}
+                        {months.map((m) => <td class="num">{dealCommValues.get(m) ? formatZAR(dealCommValues.get(m)!) : ""}</td>)}
+                      </tr>
+                    ) : null}
                     <tr class="group"><td colspan={allMonths.length + 1}>Operating costs</td></tr>
                     <OverrideRow k="other" title="Other operating costs" hint="everything except people, tax and manual recurring" />
                     <ModelRow title="Recurring (manual)" hint="tracked on the Costs tab — outside Xero" pick={(c) => c.recurring} />

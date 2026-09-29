@@ -647,6 +647,19 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   if (dealValues.size > 0) {
     adjRows.push({ id: "__deals__", name: "Deals — expected payments", kind: "income", values: dealValues });
   }
+  // Commission owed to staff goes out as cash when the deal pays — forecast it
+  // as a cost in the same month as the deal's expected payment.
+  const dealCommValues = new Map<string, number>();
+  for (const d of deals) {
+    if (d.stage === "paid" || !d.include_forecast || !d.expected_payment) continue;
+    const comm = commissionOf(d);
+    if (!comm) continue;
+    const m = d.expected_payment.slice(0, 7);
+    dealCommValues.set(m, (dealCommValues.get(m) ?? 0) + comm);
+  }
+  if (dealCommValues.size > 0) {
+    adjRows.push({ id: "__deal_comm__", name: "Commission owed (deals)", kind: "cost", values: dealCommValues });
+  }
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
@@ -675,7 +688,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const nowMonth2 = new Date().toISOString().slice(0, 7);
   const bankToday = cf.columns.find((col) => col.month === nowMonth2)?.balance ?? cf.kpis.currentCash;
   const position = { bankToday, debtorsDue, revolving, month: nowMonth2 };
-  return { settings, cf, actuals, syncNote, overrideCats, adjCats, entries, collections, position, dealValues, deals, facilityLimit, lastSync, payrollEmps, payrollEntries, allExpenses };
+  return { settings, cf, actuals, syncNote, overrideCats, adjCats, entries, collections, position, dealValues, dealCommValues, deals, facilityLimit, lastSync, payrollEmps, payrollEntries, allExpenses };
 }
 
 app.get("/app/finance/cash", async (c) => {
@@ -693,7 +706,7 @@ app.get("/app/finance/cash", async (c) => {
     <CashLiquidityPage cf={cf} settings={settings} fy={fy} fys={fys}
       bankEstimate={snapshot.cash.bankEstimate} facility={snapshot.facility} liquidity={snapshot.liquidity}
       risk={snapshot.cash.risk} fundingMonth={snapshot.cash.fundingMonth} next30Net={snapshot.cash.next30Net}
-      receivablesOutstanding={snapshot.receivables.outstanding}
+      receivablesOutstanding={snapshot.receivables.outstanding} commissionOwed={snapshot.pipeline.commissionEarned}
       syncNote={syncNote} lastSync={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={msg} />,
   );
 });
@@ -713,7 +726,7 @@ app.get("/app/finance/forecast", async (c) => {
     }
   }
   const { derived, snapshot } = await loadSnapshot(c.env);
-  const { settings, cf, overrideCats, adjCats, entries, dealValues } = derived;
+  const { settings, cf, overrideCats, adjCats, entries, dealValues, dealCommValues } = derived;
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
@@ -723,7 +736,7 @@ app.get("/app/finance/forecast", async (c) => {
   const tab: ForecastTab = tRaw === "monthly" || tRaw === "assumptions" ? tRaw : "overview";
   return c.html(
     <ForecastPage cf={cf} settings={settings} overrideCats={overrideCats} adjCats={adjCats} entries={map}
-      dealValues={dealValues} boundary={settings.actuals_through} tab={tab}
+      dealValues={dealValues} dealCommValues={dealCommValues} boundary={settings.actuals_through} tab={tab}
       facility={{ used: snapshot.facility.used, limit: snapshot.facility.limit }} bankEstimate={snapshot.cash.bankEstimate}
       lastSync={derived.lastSync ? formatDMYTime(derived.lastSync) : null}
       line={c.req.query("line")} saved={c.req.query("saved") === "1"} />,
