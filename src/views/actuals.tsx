@@ -56,7 +56,8 @@ export const ActualsPage: FC<{
   fys: number[];
   open: string | null; // month being drilled into
   lastSync: string | null;
-}> = ({ txns, fy, fys, open, lastSync }) => {
+  syncError?: string | null;
+}> = ({ txns, fy, fys, open, lastSync, syncError }) => {
   const inFy = (m: string) => fy == null || fiscalYearOf(m) === fy;
   const byMonth = new Map<string, MonthSummary>();
   for (const t of txns) {
@@ -90,6 +91,12 @@ export const ActualsPage: FC<{
         </div>
 
         <AccountsTabs active="actuals" />
+
+        {syncError ? (
+          <div class="callout section-block" style="border-left-color:var(--danger)">
+            Last sync couldn't fetch everything from Xero: {syncError} — the figures below may be incomplete. Re-run the sync.
+          </div>
+        ) : null}
 
         <div class="segmented section-block">
           <a href="/app/accounts/actuals?fy=all" class={fy == null ? "seg active" : "seg"}>All</a>

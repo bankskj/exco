@@ -473,6 +473,22 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
   const hdrs = { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" };
   const currentMonth = now.toISOString().slice(0, 7);
 
+  // Rate-limit aware GET: the sync makes 30+ calls before this fetch, so 429s
+  // are expected — honour Retry-After instead of silently returning nothing.
+  const get = async (url: string): Promise<any> => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch(url, { headers: hdrs });
+      if (res.status === 429) {
+        const wait = Math.min(60, Number(res.headers.get("Retry-After") ?? 10) || 10);
+        await new Promise((r) => setTimeout(r, (wait + 1) * 1000));
+        continue;
+      }
+      if (!res.ok) throw new Error(`Xero ${res.status} ${url.split("?")[0].split("/").pop()}: ${(await res.text()).slice(0, 200)}`);
+      return res.json();
+    }
+    throw new Error("Xero rate limit: retries exhausted");
+  };
+
   const txns: XeroTxn[] = [];
   const push = (kind: XeroTxn["kind"], id: unknown, row: any, ref: string | null) => {
     const date = parseXeroDate(row.Date) ?? "";
@@ -497,9 +513,7 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
         where: `Type=="${type}" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
         page: String(page),
       });
-      const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, { headers: hdrs });
-      if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const list = ((await res.json()) as any).Invoices ?? [];
+      const list = ((await get(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`)) as any).Invoices ?? [];
       for (const inv of list) {
         if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
         push(type === "ACCREC" ? "sale" : "bill", inv.InvoiceID, inv, inv.InvoiceNumber ? String(inv.InvoiceNumber) : inv.Reference ? String(inv.Reference) : null);
@@ -512,9 +526,7 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
       where: `Type=="SPEND" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
       page: String(page),
     });
-    const res = await fetch(`https://api.xero.com/api.xro/2.0/BankTransactions?${q.toString()}`, { headers: hdrs });
-    if (!res.ok) break; // tolerate missing scope — invoices-only actuals
-    const list = ((await res.json()) as any).BankTransactions ?? [];
+    const list = ((await get(`https://api.xero.com/api.xro/2.0/BankTransactions?${q.toString()}`)) as any).BankTransactions ?? [];
     for (const bt of list) {
       if (bt.Status !== "AUTHORISED") continue;
       push("spend", bt.BankTransactionID, bt, bt.Reference ? String(bt.Reference) : null);

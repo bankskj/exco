@@ -1169,6 +1169,7 @@ async function runXeroSync(env: Bindings): Promise<string> {
   try {
     const { since, txns } = await fetchActualTxns(token, tenantId);
     await replaceXeroTxns(env.DB, since, txns);
+    await setMeta(env.DB, "xero_actuals_error", "");
   } catch (e) {
     await setMeta(env.DB, "xero_actuals_error", e instanceof Error ? e.message : "unknown");
   }
@@ -1201,7 +1202,8 @@ app.get("/app/accounts/actuals", async (c) => {
   }
   const open = /^\d{4}-\d{2}$/.test(String(c.req.query("m"))) ? String(c.req.query("m")) : null;
   const lastSyncIso = await getMeta(c.env.DB, "xero_last_sync");
-  return c.html(<ActualsPage txns={txns} fy={fy} fys={fys} open={open} lastSync={lastSyncIso ? formatDMYTime(lastSyncIso) : null} />);
+  const syncError = (await getMeta(c.env.DB, "xero_actuals_error")) || null;
+  return c.html(<ActualsPage txns={txns} fy={fy} fys={fys} open={open} lastSync={lastSyncIso ? formatDMYTime(lastSyncIso) : null} syncError={syncError} />);
 });
 
 // ----- Income dashboard (Xero P&L) -----
