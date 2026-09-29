@@ -39,8 +39,11 @@ export function buildPayrollReport(employees: Employee[], entries: PayrollEntry[
   for (const p of periods) monthly.set(p, zero());
   for (const e of entries) add(monthly.get(e.period)!, e.gross, e.paye);
 
-  // Reporting month: the selected one if it has data, else the latest captured.
-  const latest = selected && periodsSet.has(selected) ? selected : maxPeriod(periods);
+  // Reporting month: the selected one if it has data, else the latest COMPLETED
+  // period with data (never a future month that happens to be pre-captured).
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const completed = periods.filter((p) => p <= nowMonth && (monthly.get(p)?.gross ?? 0) > 0);
+  const latest = selected && periodsSet.has(selected) ? selected : completed.length ? completed[completed.length - 1] : maxPeriod(periods);
   const idx = latest ? periods.indexOf(latest) : -1;
   const prev = idx > 0 ? periods[idx - 1] : null;
   const latestTot = latest ? monthly.get(latest)! : zero();
@@ -83,8 +86,9 @@ const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = (
 
 const SubNav: FC<{ active: "report" | "capture" }> = ({ active }) => (
   <div class="segmented" style="margin:14px 0 4px">
-    <a href="/app/payroll" class={active === "report" ? "seg active" : "seg"}>Report</a>
+    <a href="/app/payroll" class={active === "report" ? "seg active" : "seg"}>Payroll report</a>
     <a href="/app/payroll/capture" class={active === "capture" ? "seg active" : "seg"}>Capture</a>
+    <a href="/app/hr" class="seg">Employees</a>
   </div>
 );
 
@@ -99,7 +103,7 @@ export const PayrollReportPage: FC<{ employees: Employee[]; report: PayrollRepor
   const active = employees.filter((e) => e.status === "active").length;
 
   return (
-    <Layout title="Payroll" authed section="payroll" wide>
+    <Layout title="Payroll" authed section="people" wide>
       <div class="container">
         <div class="row spread">
           <div>
@@ -131,7 +135,7 @@ export const PayrollReportPage: FC<{ employees: Employee[]; report: PayrollRepor
             tone={momNett > 0 ? "neg" : "pos"} />
           <Kpi label={`Gross — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTot.gross)} sub={`${report.headcountPaid} paid · ${active} active`} />
           <Kpi label={`PAYE — ${report.latest ? label(report.latest) : "—"}`} value={formatZAR(report.latestTot.paye)} sub="ZA employees only" />
-          <Kpi label="Total nett captured" value={formatZAR(report.totalNett)} sub={`${report.periods.length} months`} />
+          <Kpi label="Active headcount" value={String(active)} sub={`${report.headcountPaid} paid in ${report.latest ? label(report.latest) : "—"}`} />
         </div>
 
         <div class="section-block card">
@@ -253,7 +257,7 @@ export const PayrollCapturePage: FC<{
   const metricLink = (m: Metric) => qs({ metric: m });
 
   return (
-    <Layout title="Payroll · Capture" authed section="payroll" wide>
+    <Layout title="Payroll · Capture" authed section="people" wide>
       <div class="container">
         <div class="row spread">
           <div>

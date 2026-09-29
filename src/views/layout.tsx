@@ -131,6 +131,15 @@ td.fc { color: #f6c453; } /* forecast cell tint */
 .badge.actual { color: var(--muted); }
 .badge.forecast { color: #f6c453; border-color: rgba(246,196,83,.35); }
 .badge.recurring { color: var(--accent); border-color: rgba(79,140,255,.35); }
+.badge.estimate { color: #f6c453; border-color: rgba(246,196,83,.35); }
+.badge.manual { color: #c792ea; border-color: rgba(199,146,234,.35); }
+.asat { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.risk { display: inline-block; padding: 4px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; }
+.risk.healthy { background: rgba(110,231,183,.12); color: var(--accent-2); }
+.risk.watch { background: rgba(246,196,83,.12); color: #f6c453; }
+.risk.funding { background: rgba(255,107,107,.12); color: var(--danger); }
+.risk.overdrawn { background: rgba(255,107,107,.2); color: var(--danger); }
+.info { cursor: help; color: var(--muted); font-size: 12px; border-bottom: 1px dotted var(--muted); }
 .badge.type-za { color: var(--accent-2); border-color: rgba(110,231,183,.35); }
 .badge.type-international { color: #f6c453; border-color: rgba(246,196,83,.35); }
 .badge.type-freelancer { color: #c792ea; border-color: rgba(199,146,234,.35); }
@@ -169,11 +178,11 @@ a.subnav { margin-right: 14px; font-weight: 600; }
 `;
 
 const NAV = [
-  { href: "/app", label: "Dashboard", key: "dashboard" },
-  { href: "/app/payroll", label: "Payroll", key: "payroll" },
-  { href: "/app/accounts", label: "Accounts", key: "accounts" },
-  { href: "/app/expenses", label: "Expenses", key: "expenses" },
-  { href: "/app/hr", label: "HR", key: "hr" },
+  { href: "/app", label: "Overview", key: "overview" },
+  { href: "/app/finance", label: "Finance", key: "finance" },
+  { href: "/app/pipeline", label: "Pipeline", key: "pipeline" },
+  { href: "/app/payroll", label: "People", key: "people" },
+  { href: "/app/admin", label: "Admin", key: "admin" },
 ];
 
 export const Layout: FC<
@@ -226,3 +235,19 @@ export const DateField: FC<{ name: string; value?: string }> = ({ name, value })
     <span class="dpicon">📅</span>
   </div>
 );
+
+/** Value-state badge: where a number comes from. Used consistently everywhere. */
+export const StateBadge: FC<{ state: "actual" | "forecast" | "estimate" | "manual" }> = ({ state }) => (
+  <span class={`badge ${state}`}>{state.toUpperCase()}</span>
+);
+
+/** "Data as at" stamp — every financial page shows when its numbers were computed/synced. */
+export const AsAt: FC<{ lastSync?: string | null }> = ({ lastSync }) => (
+  <p class="asat">
+    Data as at {new Date().toLocaleString("en-GB", { timeZone: "Africa/Johannesburg", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(",", "")}
+    {lastSync ? <> · Xero synced {lastSync}</> : null}
+  </p>
+);
+
+/** ⓘ explainer — hover text so no page needs a glossary. */
+export const Info: FC<{ text: string }> = ({ text }) => <span class="info" title={text}>ⓘ</span>;

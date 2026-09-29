@@ -21,7 +21,12 @@ export type Commission = {
   invoice_nett: number | null; // the base commission is paid on
   comm_amount: number | null; // explicit override; null = comm_pct x invoice_nett
   expected_payment: string | null; // when the money is expected to land — feeds the cashflow forecast
+  include_forecast: number; // 1 = expected payment feeds the forecast, 0 = excluded
 };
+
+export async function setIncludeForecast(db: D1Database, id: string, include: boolean): Promise<void> {
+  await db.prepare("UPDATE commissions SET include_forecast=?, updated_at=datetime('now') WHERE id=?").bind(include ? 1 : 0, id).run();
+}
 
 /** Effective commission for a deal: explicit amount wins, else % of invoice nett. */
 export function commissionOf(d: Commission): number | null {
@@ -45,7 +50,7 @@ export type CommissionLine = {
 
 export async function listCommissions(db: D1Database): Promise<Commission[]> {
   const { results } = await db
-    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount, expected_payment FROM commissions ORDER BY COALESCE(deal_date, created_at) DESC")
+    .prepare("SELECT id, staff, allocation, client, po_number, comm_pct, stage, notes, quote_no, invoice_no, deal_date, invoice_nett, comm_amount, expected_payment, COALESCE(include_forecast, 1) AS include_forecast FROM commissions ORDER BY COALESCE(deal_date, created_at) DESC")
     .all<Commission>();
   return results ?? [];
 }

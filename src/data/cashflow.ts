@@ -146,3 +146,21 @@ export async function listCfDebtors(db: D1Database): Promise<Map<string, CfDebto
   const { results } = await db.prepare("SELECT month, billed, paid, due FROM cf_debtors").all<CfDebtor>();
   return new Map((results ?? []).map((r) => [r.month, r]));
 }
+
+/**
+ * Update only the accrual columns for months that already exist — used by the
+ * Profit & Loss page after a successful live fetch so the canonical store and
+ * the live report can never drift apart.
+ */
+export async function updateCfAccruals(
+  db: D1Database,
+  rows: { month: string; income_accr: number; staff_accr: number; dev_accr: number; other_accr: number }[],
+): Promise<void> {
+  const stmt = db.prepare(
+    "UPDATE cf_actuals SET income_accr=?, staff_accr=?, dev_accr=?, other_accr=?, updated_at=datetime('now') WHERE month=?",
+  );
+  for (let i = 0; i < rows.length; i += 50) {
+    const chunk = rows.slice(i, i + 50).map((r) => stmt.bind(r.income_accr, r.staff_accr, r.dev_accr, r.other_accr, r.month));
+    if (chunk.length) await db.batch(chunk);
+  }
+}

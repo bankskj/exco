@@ -3,7 +3,8 @@ import { Layout, DateField } from "./layout";
 import { type Commission, type CommissionLine, COMM_STAGES, STAGE_LABEL, TX_TYPES, commissionOf } from "../data/commissions";
 import { formatZAR } from "../lib/money";
 import { formatDMY } from "../lib/period";
-import { AccountsTabs } from "./income";
+import { AsAt } from "./layout";
+import { commissionState } from "../lib/metrics";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -41,7 +42,8 @@ export const CommissionsPage: FC<{
   const all = visibleDeals.map((d) => ({ d, t: totalsOf(d) }));
   const totInvoiced = all.reduce((s, x) => s + x.t.invoiced, 0);
   const totPaid = all.reduce((s, x) => s + x.t.paid, 0);
-  const totComm = all.reduce((s, x) => s + (x.t.commEarned ?? 0), 0);
+  const commEarnedTot = all.reduce((s, x) => { const st = commissionState(x.d); return s + (st === "earned" || st === "payable" ? x.t.commEarned ?? 0 : 0); }, 0);
+  const commEstTot = all.reduce((s, x) => (commissionState(x.d) === "estimated" ? s + (x.t.commEarned ?? 0) : s), 0);
   const openDeals = visibleDeals.filter((d) => d.stage !== "paid").length;
   const stageStat = (stage: string) => {
     const ds = visibleDeals.filter((d) => d.stage === stage);
@@ -63,44 +65,50 @@ export const CommissionsPage: FC<{
 
   // Per-staff commission summary
   const byStaff = new Map<string, number>();
-  for (const { d, t } of all) if (t.commEarned) byStaff.set(d.staff, (byStaff.get(d.staff) ?? 0) + t.commEarned);
+  for (const { d, t } of all) {
+    const st = commissionState(d);
+    if (t.commEarned && (st === "earned" || st === "payable")) byStaff.set(d.staff, (byStaff.get(d.staff) ?? 0) + t.commEarned);
+  }
 
   return (
-    <Layout title="Deals" authed section="accounts" wide>
+    <Layout title="Deals" authed section="pipeline" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <h1 style="margin-top:12px">Accounts · Deals</h1>
-            <p class="muted" style="margin-top:0">Track every deal from Quote → PO → Invoice → Paid with a full transaction ledger — commission optional per deal.</p>
+            <h1 style="margin-top:12px">Sales Pipeline</h1>
+            <p class="muted" style="margin-top:0">
+              What business is coming? Every deal from Quote → PO → Invoice → Paid with a full ledger — commission
+              optional per deal. Only deals marked <strong>Fcast ✓</strong> with an expected payment date feed the{" "}
+              <a href="/app/finance/forecast">cash forecast</a>.
+            </p>
+            <AsAt />
           </div>
           <a class="btn btn-sm" href="/app/accounts/deals/export.csv">⬇ Export CSV</a>
         </div>
 
-        <AccountsTabs active="deals" />
-
         {saved ? <div class="callout section-block">✓ Saved.</div> : null}
 
         <div class="kpis section-block">
-          <Kpi label="Quoted value" value={formatZAR(stQuote.v)} sub={`${stQuote.n} deal(s) — what's coming`} />
-          <Kpi label="PO value" value={formatZAR(stPo.v)} sub={`${stPo.n} deal(s) committed`} tone="warn" />
-          <Kpi label="Invoiced value" value={formatZAR(stInvoice.v)} sub={`${stInvoice.n} deal(s) awaiting payment`} />
-          <Kpi label="Paid value" value={formatZAR(stPaid.v)} sub={`${stPaid.n} deal(s) done`} tone="pos" />
+          <Kpi label="Potential — quoted" value={formatZAR(stQuote.v)} sub={`${stQuote.n} deal(s) · least certain`} />
+          <Kpi label="Committed — PO received" value={formatZAR(stPo.v)} sub={`${stPo.n} deal(s)`} tone="warn" />
+          <Kpi label="Billed — invoiced" value={formatZAR(stInvoice.v)} sub={`${stInvoice.n} deal(s) awaiting payment`} />
+          <Kpi label="Collected — paid" value={formatZAR(stPaid.v)} sub={`${stPaid.n} deal(s) done`} tone="pos" />
         </div>
         <div class="kpis section-block">
           <Kpi label="Ledger invoiced" value={formatZAR(totInvoiced)} sub={`${formatZAR(totInvoiced - totPaid)} outstanding`} />
           <Kpi label="Ledger paid" value={formatZAR(totPaid)} />
-          <Kpi label="Commission due" value={formatZAR(totComm)} sub="on invoice nett (editable per deal)" tone="pos" />
+          <Kpi label="Commission earned" value={formatZAR(commEarnedTot)} sub={`invoiced deals · estimated ${formatZAR(commEstTot)} on quotes/POs`} tone="pos" />
           <Kpi label="Open deals" value={String(openDeals)} sub={`${visibleDeals.length} shown`} />
         </div>
 
         <div class="card section-block">
           <div class="row spread">
             <h3 style="margin:0">By client — click to filter</h3>
-            {clientFilter ? <a class="btn btn-sm" href="/app/accounts/deals">✕ Clear filter: {clientFilter}</a> : null}
+            {clientFilter ? <a class="btn btn-sm" href="/app/pipeline">✕ Clear filter: {clientFilter}</a> : null}
           </div>
           <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
             {[...byClient.entries()].sort((a, b) => b[1].v - a[1].v).map(([name, st]) => (
-              <a class={`btn btn-sm${clientFilter === name ? " btn-primary" : ""}`} href={clientFilter === name ? "/app/accounts/deals" : `/app/accounts/deals?client=${encodeURIComponent(name)}`}>
+              <a class={`btn btn-sm${clientFilter === name ? " btn-primary" : ""}`} href={clientFilter === name ? "/app/accounts/deals" : `/app/pipeline?client=${encodeURIComponent(name)}`}>
                 {name} · {formatZAR(st.v)} <span class="muted">({st.n})</span>
               </a>
             ))}
@@ -109,7 +117,7 @@ export const CommissionsPage: FC<{
 
         {byStaff.size > 0 ? (
           <div class="card section-block">
-            <h3>Commission by staff member</h3>
+            <h3>Commission earned by staff member — invoiced deals only</h3>
             <div class="row" style="gap:24px;flex-wrap:wrap">
               {[...byStaff.entries()].sort((a, b) => b[1] - a[1]).map(([name, amt]) => (
                 <div><strong>{name}</strong> <span class="pos">{formatZAR(amt)}</span></div>
@@ -126,7 +134,7 @@ export const CommissionsPage: FC<{
                 <tr>
                   <th style="text-align:left">Allocation</th><th>Date</th><th>Staff</th><th>Client</th>
                   <th>Quote #</th><th>PO #</th><th>Invoice #</th><th>Expected pay</th>
-                  <th>Stage</th><th>Invoiced</th><th>Paid</th><th>Invoice nett</th><th>Comm %</th><th>Commission</th><th></th>
+                  <th>Stage</th><th>Fcast</th><th>Invoiced</th><th>Paid</th><th>Invoice nett</th><th>Comm %</th><th>Commission</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -134,7 +142,7 @@ export const CommissionsPage: FC<{
                   <>
                   <tr style={openId === d.id ? "background:rgba(79,140,255,.08)" : ""}>
                     <td style="text-align:left">
-                      <a href={openId === d.id ? "/app/accounts/deals" : `/app/accounts/deals?open=${d.id}`} style="font-weight:600">
+                      <a href={openId === d.id ? "/app/accounts/deals" : `/app/pipeline?open=${d.id}`} style="font-weight:600">
                         {d.allocation} <span class="muted" style="font-size:10px">{openId === d.id ? "▲" : "▼"}</span>
                       </a>
                     </td>
@@ -151,6 +159,14 @@ export const CommissionsPage: FC<{
                         <select name="stage" onchange="this.form.submit()" style="padding:4px 8px;font-size:12px;width:auto">
                           {COMM_STAGES.map((s) => <option value={s} selected={d.stage === s}>{STAGE_LABEL[s]}</option>)}
                         </select>
+                      </form>
+                    </td>
+                    <td>
+                      <form method="post" action="/app/accounts/deals/forecast-flag" style="margin:0">
+                        <input type="hidden" name="id" value={d.id} />
+                        <input type="hidden" name="include" value={d.include_forecast ? "0" : "1"} />
+                        <button class="btn btn-sm" type="submit" title={d.include_forecast ? "Included in the cash forecast — click to exclude" : "Excluded from the cash forecast — click to include"}
+                          style={d.include_forecast ? "color:var(--accent-2)" : "opacity:.45"}>{d.include_forecast ? "✓" : "—"}</button>
                       </form>
                     </td>
                     <td class="num">{formatZAR(t.invoiced)}</td>
@@ -174,6 +190,8 @@ export const CommissionsPage: FC<{
                         onchange="this.form.submit()"
                         title={d.comm_amount != null ? "Manually set — clear to return to % × nett" : "Auto: % × invoice nett — type to override"}
                         style="width:90px;text-align:right" />
+                      {(() => { const st = commissionState(d); return st === "none" ? null :
+                        <div class="cellhint">{st === "estimated" ? "estimated" : st === "earned" ? "earned" : "payable"}</div>; })()}
                     </td>
                     <td>
                       <form method="post" action="/app/accounts/deals/delete" style="margin:0"
@@ -185,7 +203,7 @@ export const CommissionsPage: FC<{
                   </tr>
                   {openId === d.id ? (
                     <tr>
-                      <td colspan={15} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={16} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <DealLedger deal={d} lines={linesByDeal.get(d.id) ?? []} />
                       </td>
                     </tr>
@@ -240,7 +258,7 @@ const DealLedger: FC<{ deal: Commission; lines: CommissionLine[] }> = ({ deal, l
         <label style="margin:0;font-size:13px">Expected payment</label>
         <div style="width:130px"><DateField name="expected_payment" value={deal.expected_payment ? formatDMY(deal.expected_payment) : ""} /></div>
         <button class="btn btn-sm" type="submit">Save</button>
-        <span class="muted" style="font-size:12px">unpaid deals with a date show as pipeline income on the <a href="/app/accounts/edit">Forecast grid</a></span>
+        <span class="muted" style="font-size:12px">unpaid deals marked Fcast ✓ show as pipeline income on the <a href="/app/finance/forecast?t=monthly">Forecast</a></span>
       </form>
 
       <details style="margin-bottom:14px">

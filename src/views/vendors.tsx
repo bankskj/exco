@@ -3,7 +3,6 @@ import { Layout } from "./layout";
 import type { VendorSummary } from "../lib/xero";
 import type { VendorRule } from "../data/expenses";
 import { formatZAR, formatZARCompact } from "../lib/money";
-import { ExpenseTabs } from "./monthly_expenses";
 
 export type AnnotatedVendor = VendorSummary & {
   rule: VendorRule | null;
@@ -21,9 +20,9 @@ export const VendorReviewPage: FC<{
   const tracked = vendors.filter((v) => v.effective === "track" || v.effective === "auto-track");
   const monthlyTotal = tracked.reduce((s, v) => s + v.avgMonthly, 0);
   return (
-    <Layout title="Vendor review" authed section="expenses" wide>
+    <Layout title="Vendor review" authed section="admin" wide>
       <div class="container">
-        <p style="margin:12px 0 0"><a href="/app/expenses">← Recurring expenses</a></p>
+        <p style="margin:12px 0 0"><a href="/app/admin">← Admin</a> · <a href="/app/finance/costs">Recurring costs</a></p>
         <div class="row spread">
           <div>
             <h1 style="margin-top:8px">Vendor review</h1>
@@ -34,7 +33,7 @@ export const VendorReviewPage: FC<{
           </div>
         </div>
 
-        <ExpenseTabs active="vendors" />
+        <p style="margin:4px 0 0"><a href="/app/admin">← Admin</a></p>
 
         {msg ? <div class="callout section-block">{msg}</div> : null}
 

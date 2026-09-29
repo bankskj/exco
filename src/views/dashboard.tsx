@@ -1,84 +1,116 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "./layout";
+import { Layout, AsAt, Info, StateBadge } from "./layout";
+import type { Snapshot } from "../lib/metrics";
 import { formatZAR } from "../lib/money";
-import { label } from "../lib/period";
+import { label, fyLabel } from "../lib/period";
+import { RISK_LABEL, riskSub } from "./cashflow_derived";
 
-export type DashStats = {
-  cash: { bankToday: number; runwayMonths: number | null; runwayMonth: string | null; netPosition: number; anchored: boolean };
-  income: { fyLabel: string; income: number; net: number; nim: number };
-  deals: { quoted: number; quotedN: number; invoiced: number; commDue: number };
-  payroll: { month: string | null; nett: number; gross: number; paid: number };
-  expenses: { recurringMonthly: number; activeN: number; debtorsDue: number };
-  hr: { active: number; avgTenure: string; warnings: number };
-};
-
-const Stat: FC<{ label: string; value: string; tone?: string }> = ({ label, value, tone }) => (
-  <div style="min-width:110px">
-    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px">{label}</div>
-    <div class={tone ?? ""} style="font-size:19px;font-weight:700;margin-top:2px">{value}</div>
-  </div>
-);
-
-const SectionCard: FC<{ href: string; icon: string; title: string; children?: unknown }> = ({ href, icon, title, children }) => (
+const Big: FC<{ href: string; label: string; value: string; tone?: string; badge?: "actual" | "forecast" | "estimate" | "manual"; info?: string; children?: unknown }> =
+  ({ href, label: l, value, tone, badge, info, children }) => (
   <a class="card" href={href} style="color:var(--text);display:block">
-    <div class="row spread">
-      <h2 style="margin:0"><span class="section-icon" style="margin-right:8px">{icon}</span>{title}</h2>
-      <span class="muted" style="font-size:12px">open →</span>
+    <div class="k-label" style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px">
+      {l} {info ? <Info text={info} /> : null} {badge ? <StateBadge state={badge} /> : null}
     </div>
-    <div class="row" style="gap:22px;margin-top:14px;flex-wrap:wrap">{children}</div>
+    <div class={`k-value ${tone ?? ""}`} style="font-size:28px;font-weight:700;margin-top:8px">{value}</div>
+    <div style="margin-top:8px;font-size:13px">{children}</div>
   </a>
 );
 
-export const Dashboard: FC<{ s: DashStats }> = ({ s }) => (
-  <Layout title="Dashboard" authed section="dashboard" wide>
-    <div class="container">
-      <h1 style="margin-top:16px">Dashboard</h1>
-      <p class="muted">Live across the business — click any card to drill in.</p>
-
-      <div class="grid section-block" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:18px">
-        <SectionCard href="/app/accounts" icon="💰" title="Cashflow">
-          <Stat label="Bank (modelled)" value={formatZAR(s.cash.bankToday)} tone={s.cash.bankToday < 0 ? "neg" : "pos"} />
-          <Stat label="Runway" value={s.cash.runwayMonths == null ? "Cash-positive" : `${s.cash.runwayMonths} mo`}
-            tone={s.cash.runwayMonths == null ? "pos" : s.cash.runwayMonths <= 6 ? "neg" : "warn"} />
-          <Stat label="Net position" value={formatZAR(s.cash.netPosition)} tone={s.cash.netPosition < 0 ? "neg" : "pos"} />
-        </SectionCard>
-
-        <SectionCard href="/app/accounts/income" icon="📈" title={`Income — ${s.income.fyLabel} to date`}>
-          <Stat label="Income" value={formatZAR(s.income.income)} />
-          <Stat label="Net profit" value={formatZAR(s.income.net)} tone={s.income.net < 0 ? "neg" : "pos"} />
-          <Stat label="NI margin" value={`${s.income.nim}%`} tone={s.income.nim < 0 ? "neg" : ""} />
-        </SectionCard>
-
-        <SectionCard href="/app/accounts/deals" icon="🤝" title="Deals">
-          <Stat label="Quoted (pipeline)" value={formatZAR(s.deals.quoted)} />
-          <Stat label="Invoiced value" value={formatZAR(s.deals.invoiced)} />
-          <Stat label="Commission due" value={formatZAR(s.deals.commDue)} tone="pos" />
-        </SectionCard>
-
-        <SectionCard href="/app/payroll" icon="🧾" title={`Payroll — ${s.payroll.month ? label(s.payroll.month) : "—"}`}>
-          <Stat label="Nett" value={formatZAR(s.payroll.nett)} />
-          <Stat label="Gross" value={formatZAR(s.payroll.gross)} />
-          <Stat label="People paid" value={String(s.payroll.paid)} />
-        </SectionCard>
-
-        <SectionCard href="/app/expenses" icon="🔁" title="Expenses">
-          <Stat label="Recurring / month" value={formatZAR(s.expenses.recurringMonthly)} />
-          <Stat label="Active items" value={String(s.expenses.activeN)} />
-          <Stat label="Debtors due" value={formatZAR(s.expenses.debtorsDue)} tone="warn" />
-        </SectionCard>
-
-        <SectionCard href="/app/hr" icon="👥" title="HR">
-          <Stat label="Active headcount" value={String(s.hr.active)} />
-          <Stat label="Avg tenure" value={s.hr.avgTenure} />
-          <Stat label="Warnings on file" value={String(s.hr.warnings)} tone={s.hr.warnings > 0 ? "warn" : ""} />
-        </SectionCard>
-      </div>
-
-      {!s.cash.anchored ? (
-        <p class="muted section-block" style="font-size:12px">
-          Cashflow balance is anchored — figures update from Xero on the monthly sync or a manual "Sync from Xero".
-        </p>
-      ) : null}
-    </div>
-  </Layout>
+const Attention: FC<{ href: string; title: string; tone: string; children?: unknown }> = ({ href, title, tone, children }) => (
+  <a class="card" href={href} style={`color:var(--text);display:block;border-left:3px solid ${tone}`}>
+    <div style="font-weight:700;font-size:14px">{title}</div>
+    <div class="muted" style="font-size:13px;margin-top:6px">{children}</div>
+  </a>
 );
+
+export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null }> = ({ s, lastSyncLabel }) => {
+  const overdueShare = s.receivables.outstanding ? Math.round((s.receivables.overdue30 / s.receivables.outstanding) * 100) : 0;
+  return (
+    <Layout title="Overview" authed section="overview" wide>
+      <div class="container">
+        <div class="row spread">
+          <div>
+            <h1 style="margin-top:16px">Overview</h1>
+            <p class="muted" style="margin:0">How is the business doing? Click any card for the detail behind it.</p>
+            <AsAt lastSync={lastSyncLabel} />
+          </div>
+          <span class={`risk ${s.cash.risk}`} style="margin-top:20px" title={riskSub(s.cash.risk, s.cash.fundingMonth, s.cash.lowest)}>
+            Cash risk: {RISK_LABEL[s.cash.risk]}
+          </span>
+        </div>
+
+        <div class="grid section-block" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+          <Big href="/app/finance/cash" label="Cash available" badge="estimate"
+            value={formatZAR(s.cash.bankEstimate)} tone={s.cash.bankEstimate < 0 ? "neg" : "pos"}
+            info="Estimated bank balance: the anchored statement balance plus every cash movement since. Not a live bank feed.">
+            <span class="muted">bank balance as at {label(s.cash.asAtMonth)}</span>
+            {s.liquidity != null ? <div class="muted">available liquidity {formatZAR(s.liquidity)} (incl. undrawn facility)</div> : null}
+          </Big>
+
+          <Big href="/app/finance/receivables" label="Outstanding customer invoices" badge="actual"
+            value={formatZAR(s.receivables.outstanding)} tone="warn"
+            info="Open balances on Xero sales invoices — money customers still owe us.">
+            <div class="muted">Overdue 30+ days: <span class={s.receivables.overdue30 > 0 ? "warn" : ""}>{formatZAR(s.receivables.overdue30)}</span></div>
+            <div class="muted">Raised in the last 30 days: {formatZAR(s.receivables.dueSoon)}</div>
+          </Big>
+
+          <Big href="/app/finance/pnl" label={`Profit ${fyLabel(s.profit.fy)} to date`} badge="actual"
+            value={formatZAR(s.profit.netProfit)} tone={s.profit.netProfit < 0 ? "neg" : "pos"}
+            info={`Revenue earned less expenses recorded in Xero, ${label(s.profit.periodStart)}–${label(s.profit.periodEnd)}. Not cash — invoices and bills may be paid later.`}>
+            <div class="muted">{s.profit.netMarginPct}% net margin · revenue {formatZAR(s.profit.revenue)}</div>
+            <div class="muted">books complete through {label(s.boundary)}</div>
+          </Big>
+
+          <Big href="/app/finance/forecast" label="Forecast cash low point" badge="forecast"
+            value={formatZAR(s.cash.lowest.balance)} tone={s.cash.lowest.balance < 0 ? "neg" : "pos"}
+            info="The lowest projected bank balance in the forecast window, from the Forecast model.">
+            <div class="muted">lowest projected balance · {label(s.cash.lowest.month)}</div>
+            {s.cash.fundingMonth ? <div class="warn">⚠ Funding pressure {s.cash.risk === "overdrawn" ? "now" : `begins ${label(s.cash.fundingMonth)}`}</div> : <div class="pos">cash stays above zero</div>}
+          </Big>
+        </div>
+
+        <h3 class="section-block">Attention required</h3>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+          <Attention href="/app/finance/receivables" title="Collections" tone={overdueShare > 30 ? "var(--danger)" : "#f6c453"}>
+            {formatZAR(s.receivables.outstanding)} outstanding across {s.receivables.openInvoices} invoice(s) ·{" "}
+            {formatZAR(s.receivables.overdue30)} overdue 30+ days ({overdueShare}%)
+          </Attention>
+          <Attention href="/app/finance/forecast" title="Forecast" tone={s.cash.fundingMonth ? "var(--danger)" : "var(--accent-2)"}>
+            {s.cash.fundingMonth
+              ? `Cash below zero from ${label(s.cash.fundingMonth)} — lowest ${formatZAR(s.cash.lowest.balance)} in ${label(s.cash.lowest.month)}`
+              : "Forecast cash stays above zero for the full horizon"}
+          </Attention>
+          <Attention href="/app/finance/pnl" title="Profitability" tone={s.profit.lossMonths > s.profit.monthsCounted / 2 ? "var(--danger)" : s.profit.lossMonths > 0 ? "#f6c453" : "var(--accent-2)"}>
+            {s.profit.lossMonths} of the last {s.profit.monthsCounted} completed months were loss-making
+          </Attention>
+          <Attention href="/app/finance/costs" title="Costs" tone="var(--accent)">
+            Recurring operating costs {formatZAR(s.costs.recurringMonthly)}/month across {s.costs.activeN} active item(s)
+          </Attention>
+        </div>
+
+        <h3 class="section-block">Around the business</h3>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+          <a class="card" href="/app/pipeline" style="color:var(--text);display:block">
+            <div class="row spread"><h2 style="margin:0;font-size:16px">🤝 Pipeline</h2><span class="muted" style="font-size:12px">open →</span></div>
+            <div class="muted" style="font-size:13px;margin-top:8px">
+              Potential {formatZAR(s.pipeline.potential)} · committed {formatZAR(s.pipeline.committed)} · billed {formatZAR(s.pipeline.billed)}
+              <br />commission earned {formatZAR(s.pipeline.commissionEarned)}{s.pipeline.commissionEstimated ? ` · estimated ${formatZAR(s.pipeline.commissionEstimated)}` : ""}
+            </div>
+          </a>
+          <a class="card" href="/app/payroll" style="color:var(--text);display:block">
+            <div class="row spread"><h2 style="margin:0;font-size:16px">🧾 Payroll — {s.payroll.month ? label(s.payroll.month) : "—"}</h2><span class="muted" style="font-size:12px">open →</span></div>
+            <div class="muted" style="font-size:13px;margin-top:8px">
+              Gross {formatZAR(s.payroll.gross)} · nett {formatZAR(s.payroll.nett)} · {s.payroll.paid} people paid
+            </div>
+          </a>
+          <a class="card" href="/app/hr" style="color:var(--text);display:block">
+            <div class="row spread"><h2 style="margin:0;font-size:16px">👥 People</h2><span class="muted" style="font-size:12px">open →</span></div>
+            <div class="muted" style="font-size:13px;margin-top:8px">
+              {s.people.hrActive} employees · {s.people.contractors} contractors/international · {s.people.payrollPaid} paid last run
+            </div>
+          </a>
+        </div>
+      </div>
+    </Layout>
+  );
+};

@@ -116,11 +116,16 @@ export const HrDashboard: FC<{
   };
 
   return (
-    <Layout title="HR" authed section="hr" wide>
+    <Layout title="HR" authed section="people" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <h1 style="margin-top:12px">HR · Headcount</h1>
+            <div class="segmented" style="margin:12px 0 10px">
+              <a href="/app/payroll" class="seg">Payroll report</a>
+              <a href="/app/payroll/capture" class="seg">Capture</a>
+              <a href="/app/hr" class="seg active">Employees</a>
+            </div>
+            <h1 style="margin:0 0 8px">People · Employees</h1>
             <p class="muted" style="margin-top:0">Who we have, where they are, and how long they've been with us.</p>
           </div>
           <a class="btn btn-sm" href="/app/hr/export.csv">⬇ Export CSV</a>
@@ -227,7 +232,7 @@ export const HrEmployeePage: FC<{
   const t = tenure(emp, now);
   const warnings = notes.filter((n) => n.kind === "verbal_warning" || n.kind === "written_warning").length;
   return (
-    <Layout title={emp.name} authed section="hr" wide>
+    <Layout title={emp.name} authed section="people" wide>
       <div class="container">
         <p style="margin:12px 0 0"><a href="/app/hr">← Headcount</a></p>
         <div class="row spread">

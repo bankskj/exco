@@ -3,7 +3,6 @@ import { Layout } from "./layout";
 import type { ActualTxn } from "../data/actuals";
 import { formatZAR } from "../lib/money";
 import { label, formatDMY, fiscalYearOf, fyLabel } from "../lib/period";
-import { AccountsTabs } from "./income";
 
 type MonthSummary = {
   month: string;
@@ -77,37 +76,27 @@ export const ActualsPage: FC<{
   }
   const months = [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1));
   const tot = months.reduce((a, s) => ({ sales: a.sales + s.sales, out: a.out + s.bills + s.spend + s.sars }), { sales: 0, out: 0 });
-  // Running balance: cumulative net, oldest month first (within the FY view).
-  const running = new Map<string, number>();
-  let cum = 0;
-  for (const s2 of [...months].sort((a, b) => (a.month < b.month ? -1 : 1))) {
-    cum += s2.sales - s2.bills - s2.spend - s2.sars;
-    running.set(s2.month, cum);
-  }
-  const nets = months.map((s2) => s2.sales - s2.bills - s2.spend - s2.sars);
-  const avgNet = nets.length ? (tot.sales - tot.out) / nets.length : 0;
-  const net1 = (x: MonthSummary) => x.sales - x.bills - x.spend - x.sars;
-  const best = months.length ? months.reduce((a, b) => (net1(a) >= net1(b) ? a : b)) : null;
-  const worst = months.length ? months.reduce((a, b) => (net1(a) <= net1(b) ? a : b)) : null;
+  const avgNet = months.length ? (tot.sales - tot.out) / months.length : 0;
   const openRows = open ? txns.filter((t) => t.txn_date.slice(0, 7) === open) : [];
-  const qs = (m: string | null) => `/app/accounts/actuals?${fy != null ? `fy=${fy}&` : "fy=all&"}${m ? `m=${m}` : ""}`.replace(/[&?]$/, "");
+  const qs = (m: string | null) => `/app/finance/transactions?${fy != null ? `fy=${fy}&` : "fy=all&"}${m ? `m=${m}` : ""}`.replace(/[&?]$/, "");
 
   return (
-    <Layout title="Accounts — Actuals" authed section="accounts" wide>
+    <Layout title="Accounts — Actuals" authed section="finance" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <h1 style="margin-top:12px">Accounts · Actuals</h1>
+            <p style="margin:12px 0 0"><a href="/app/finance">← Finance</a></p>
+            <h1 style="margin-top:6px">Transaction Detail</h1>
             <p class="muted" style="margin-top:0">
-              Straight from Xero, nothing filtered: every approved sales invoice, supplier bill and spend-money
-              transaction, by the month it's dated (accrual). Figures are excl VAT so they tie back to the P&L.
-              Click a month to see every document behind it.
+              The drill-down layer: every approved sales invoice, supplier bill and spend-money transaction from
+              Xero, nothing filtered, by the month it's dated. Figures are excl VAT so they tie back to{" "}
+              <a href="/app/finance/pnl">Profit &amp; Loss</a>. Reached from the P&amp;L, Cash and Receivables pages —
+              click a month for every document behind it.
             </p>
           </div>
           <span class="muted" style="font-size:12px;margin-top:16px">Synced {lastSync ? lastSync : "—"} · updates on every Xero sync</span>
         </div>
 
-        <AccountsTabs active="actuals" />
 
         {syncError ? (
           <div class="callout section-block" style="border-left-color:var(--danger)">
@@ -116,9 +105,9 @@ export const ActualsPage: FC<{
         ) : null}
 
         <div class="segmented section-block">
-          <a href="/app/accounts/actuals?fy=all" class={fy == null ? "seg active" : "seg"}>All</a>
+          <a href="/app/finance/transactions?fy=all" class={fy == null ? "seg active" : "seg"}>All</a>
           {fys.map((y) => (
-            <a href={`/app/accounts/actuals?fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
+            <a href={`/app/finance/transactions?fy=${y}`} class={fy === y ? "seg active" : "seg"}>{fyLabel(y)}</a>
           ))}
         </div>
 
@@ -129,11 +118,8 @@ export const ActualsPage: FC<{
             <div class="kpis section-block">
               <Kpi label="Invoiced (sales)" value={formatZAR(tot.sales)} sub="excl VAT" />
               <Kpi label="Spent (bills + spend money)" value={formatZAR(tot.out)} sub="excl VAT" />
-              <Kpi label="Running balance" value={formatZAR(tot.sales - tot.out)} tone={tot.sales - tot.out < 0 ? "neg" : "pos"}
-                sub={`net over ${months.length} month(s) · avg ${formatZAR(avgNet)}/mo`} />
-              <Kpi label="Best month" value={best ? formatZAR(net1(best)) : "—"} tone="pos" sub={best ? label(best.month) : undefined} />
-              <Kpi label="Worst month" value={worst ? formatZAR(net1(worst)) : "—"}
-                tone={worst && net1(worst) < 0 ? "neg" : ""} sub={worst ? label(worst.month) : undefined} />
+              <Kpi label="Net (documents)" value={formatZAR(tot.sales - tot.out)} tone={tot.sales - tot.out < 0 ? "neg" : "pos"}
+                sub={`over ${months.length} month(s) · avg ${formatZAR(avgNet)}/mo`} />
             </div>
 
             <div class="card section-block">
@@ -143,7 +129,7 @@ export const ActualsPage: FC<{
                   <thead>
                     <tr>
                       <th style="text-align:left">Month</th><th>Invoiced (sales)</th><th>Supplier bills</th>
-                      <th>Spend money</th><th>SARS (tax)</th><th>Total out</th><th>Net</th><th>P&amp;L net</th><th>Running</th><th>Docs</th>
+                      <th>Spend money</th><th>SARS (tax)</th><th>Total out</th><th>Net</th><th>P&amp;L net</th><th>Docs</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -167,12 +153,11 @@ export const ActualsPage: FC<{
                             <td class="num">{formatZAR(out)}</td>
                             <td class={`num ${net < 0 ? "neg" : "pos"}`}>{formatZAR(net)}</td>
                             <td class={`num muted ${pl != null && pl < 0 ? "neg" : ""}`}>{pl != null ? formatZAR(pl) : "—"}</td>
-                            <td class={`num ${(running.get(s.month) ?? 0) < 0 ? "neg" : ""}`} style="font-weight:600">{formatZAR(running.get(s.month) ?? 0)}</td>
                             <td class="num muted">{s.count}</td>
                           </tr>
                           {isOpen ? (
                             <tr>
-                              <td colspan={10} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                              <td colspan={9} style="text-align:left;background:#0c0f14;padding:14px 18px">
                                 <strong>{label(s.month)}</strong>
                                 <span class="muted" style="font-size:12px"> — {openRows.filter((t) => t.kind === "sale").length} sales invoice(s), {openRows.filter((t) => t.kind !== "sale").length} outgoing</span>
                                 <div style="margin-top:10px"><TxnTable rows={openRows} /></div>

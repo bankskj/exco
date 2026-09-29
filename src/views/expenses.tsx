@@ -6,6 +6,7 @@ import { formatZAR } from "../lib/money";
 import { formatDMY, formatDMYTime } from "../lib/period";
 import { hBars } from "../lib/charts";
 import { ExpenseTabs } from "./monthly_expenses";
+import { FinanceTabs } from "./income";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
   <div class="kpi">
@@ -39,7 +40,7 @@ export const ExpensesPage: FC<{
   // Sortable header link: clicking the active column flips direction; a new column gets its natural default.
   const sortHref = (col: SortKey) => {
     const nextDir = sort === col ? (dir === "asc" ? "desc" : "asc") : col === "name" ? "asc" : "desc";
-    return `/app/expenses?sort=${col}&dir=${nextDir}`;
+    return `/app/finance/costs?sort=${col}&dir=${nextDir}`;
   };
   const arrow = (col: SortKey) => (sort === col ? (dir === "asc" ? " ▲" : " ▼") : "");
   const listQs = `sort=${sort}&dir=${dir}`;
@@ -69,16 +70,21 @@ export const ExpensesPage: FC<{
   })();
 
   return (
-    <Layout title="Recurring expenses" authed section="expenses" wide>
+    <Layout title="Recurring expenses" authed section="finance" wide>
       <div class="container">
         <div class="row spread">
           <div>
-            <h1 style="margin-top:12px">Recurring expenses</h1>
-            <p class="muted" style="margin-top:0">Standing costs — captured here or detected from your Xero bills.</p>
+            <h1 style="margin-top:12px">Finance · Costs</h1>
+            <p class="muted" style="margin-top:0">
+              What are we spending? Recurring operating costs — captured here or detected from Xero bills. Tax &amp;
+              statutory payments (SARS) are tracked separately on the <a href="/app/finance/forecast?t=monthly">Forecast</a>,
+              not as an operating cost.
+            </p>
           </div>
           <a class="btn btn-sm" href="/app/expenses/export.csv">⬇ Export CSV</a>
         </div>
 
+        <FinanceTabs active="costs" />
         <ExpenseTabs active="recurring" />
 
         {msg ? <div class="callout section-block">{msg}</div> : null}
@@ -94,7 +100,16 @@ export const ExpensesPage: FC<{
             sub={`${endRows.length} expense(s)${unknownTotal > 0.005 ? ` · ${formatZAR(unknownTotal)} unclassified` : ""}`} />
         </div>
 
-        <XeroCard xero={xero} />
+        <div class="callout section-block row spread">
+          <span>
+            Xero: {xero.connected ? <span class="badge income">connected · {xero.orgName ?? "org"}</span> : <span class="badge cost">not connected</span>}
+            {" "}— connection, vendor rules and sync settings live under <a href="/app/admin">Admin</a>.
+          </span>
+          <form method="post" action="/app/expenses/sync" style="margin:0">
+            <input type="hidden" name="back" value="costs" />
+            <button class="btn btn-sm btn-primary" type="submit">Sync from Xero</button>
+          </form>
+        </div>
 
         <div class="section-block">
           <div class="tablewrap">
@@ -127,7 +142,7 @@ export const ExpensesPage: FC<{
                   <tr style={e.active ? "" : "opacity:.45"}>
                     <td style="text-align:left">
                       {vendorKey(e) ? (
-                        <a href={openId === e.id ? `/app/expenses?${rowQs}` : `/app/expenses?${rowQs}&open=${e.id}`}
+                        <a href={openId === e.id ? `/app/finance/costs?${rowQs}` : `/app/finance/costs?${rowQs}&open=${e.id}`}
                           style="color:inherit;font-weight:600">
                           {e.name} <span class="muted" style="font-size:10px">{openId === e.id ? "▲" : "▼"}</span>
                         </a>
@@ -199,9 +214,9 @@ export const ExpensesPage: FC<{
           </div>
           {pageCount > 1 ? (
             <div class="pager">
-              {p > 1 ? <a class="btn btn-sm" href={`/app/expenses?page=${p - 1}&${listQs}`}>← Prev</a> : null}
+              {p > 1 ? <a class="btn btn-sm" href={`/app/finance/costs?page=${p - 1}&${listQs}`}>← Prev</a> : null}
               <span class="muted">Page {p} of {pageCount} · {expenses.length} expenses</span>
-              {p < pageCount ? <a class="btn btn-sm" href={`/app/expenses?page=${p + 1}&${listQs}`}>Next →</a> : null}
+              {p < pageCount ? <a class="btn btn-sm" href={`/app/finance/costs?page=${p + 1}&${listQs}`}>Next →</a> : null}
             </div>
           ) : null}
         </div>
@@ -241,14 +256,14 @@ export const ExpensesPage: FC<{
   );
 };
 
-const XeroCard: FC<{ xero: XeroState }> = ({ xero }) => (
+export const XeroCard: FC<{ xero: XeroState }> = ({ xero }) => (
   <div class="card section-block">
     <div class="row spread">
       <h3 style="margin:0">Xero</h3>
       {xero.connected ? (
         <div class="row" style="gap:10px">
           <span class="badge income">connected · {xero.orgName ?? "org"}</span>
-          <a class="btn btn-sm" href="/app/expenses/vendors">Review vendors</a>
+          <a class="btn btn-sm" href="/app/admin/vendors">Review vendors</a>
           <form method="post" action="/app/expenses/sync" style="margin:0">
             <button class="btn btn-sm btn-primary" type="submit">Sync from Xero</button>
           </form>
@@ -289,7 +304,7 @@ npx wrangler secret put XERO_CLIENT_SECRET</pre>
       <p class="muted" style="margin:12px 0 0">
         Sync pulls Xero repeating bills and detects recurring vendors from ordinary bills (3+ of the last 6 months, at
         average monthly spend). Vendors matching payroll names or contractor prefixes are excluded automatically —
-        fine-tune everything in <a href="/app/expenses/vendors">Review vendors</a>. Runs automatically on the 1st of
+        fine-tune everything in <a href="/app/admin/vendors">Review vendors</a>. Runs automatically on the 1st of
         every month.
       </p>
     )}

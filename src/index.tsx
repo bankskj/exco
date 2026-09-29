@@ -3,7 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { AppEnv, Bindings } from "./types";
 import { checkPassword, startSession, endSession, isAuthed, requireAuth } from "./auth";
 import { Landing, Login } from "./views/pages";
-import { Dashboard, type DashStats } from "./views/dashboard";
+import { Dashboard } from "./views/dashboard";
 import { HrDashboard, HrEmployeePage, tenure } from "./views/hr";
 import {
   listHrEmployees,
@@ -30,16 +30,20 @@ import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFr
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
 import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
 import { IncomePage, type ExpenseBucket } from "./views/income";
-import { CashflowDerivedPage } from "./views/cashflow_derived";
+import { CashLiquidityPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
-import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
+import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, setIncludeForecast, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
 import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
-import { CashflowDashboard } from "./views/cashflow";
-import { ForecastGridPage, type EntryMap } from "./views/cashflow_edit";
+import { ForecastPage, type EntryMap, type ForecastTab } from "./views/cashflow_edit";
+import { FinanceOverviewPage } from "./views/finance_overview";
+import { ReceivablesPage, type CustomerRow } from "./views/receivables";
+import { AdminPage, DataQualityPage } from "./views/admin";
+import { buildSnapshot, type Snapshot } from "./lib/metrics";
+import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
 import {
@@ -64,6 +68,7 @@ import {
   getSettings,
   saveSettings,
   upsertCfActuals,
+  updateCfAccruals,
   listCfActuals,
   replaceCfDebtors,
   listCfDebtors,
@@ -117,79 +122,121 @@ app.use("/app", requireAuth);
 app.use("/app/*", requireAuth);
 
 app.get("/app", async (c) => {
-  const [derived, hrEmployees, hrWarnings, deals, dealLines, payrollEmployees2, payrollEntries2] = await Promise.all([
-    loadDerived(c.env, "cash"),
-    listHrEmployees(c.env.DB),
-    warningCounts(c.env.DB),
-    listCommissions(c.env.DB),
-    listAllLines(c.env.DB),
-    listEmployees(c.env.DB),
-    listPayrollEntries(c.env.DB),
+  const { derived, snapshot } = await loadSnapshot(c.env);
+  return c.html(<Dashboard s={snapshot} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
+});
+
+// ---------- Finance overview ----------
+
+app.get("/app/finance", async (c) => {
+  const { derived, snapshot } = await loadSnapshot(c.env);
+  // FY-to-date cash movement and invoicing, from the same canonical store.
+  const fyStart = snapshot.profit.periodStart;
+  let cashReceivedFy = 0;
+  let cashPaidFy = 0;
+  let invoicedFy = 0;
+  for (const [m, a] of derived.actuals) {
+    if (m < fyStart || m > snapshot.boundary) continue;
+    cashReceivedFy += a.income;
+    invoicedFy += a.income_accr;
+  }
+  for (const col of derived.cf.columns) {
+    if (col.month < fyStart || col.month > snapshot.boundary) continue;
+    cashPaidFy += col.cost;
+  }
+  return c.html(
+    <FinanceOverviewPage s={snapshot} cashReceivedFy={cashReceivedFy} cashPaidFy={cashPaidFy} invoicedFy={invoicedFy}
+      lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />,
+  );
+});
+
+// ---------- Receivables ----------
+
+app.get("/app/finance/receivables", async (c) => {
+  const [txns, debtors, actuals, lastSync] = await Promise.all([
+    listXeroTxns(c.env.DB),
+    listCfDebtors(c.env.DB),
+    listCfActuals(c.env.DB),
+    getMeta(c.env.DB, "xero_last_sync"),
   ]);
-  const now = new Date();
-  const nowMonth = now.toISOString().slice(0, 7);
-
-  // Income FYTD (accrual, from the synced P&L store)
-  const fy = fiscalYearOf(nowMonth);
-  const fyStart = `${fy - 1}-03`;
-  let inc = 0;
-  let exp = 0;
-  const actualsMap = await listCfActuals(c.env.DB);
-  for (const [m, a] of actualsMap) {
-    if (m >= fyStart && m <= nowMonth) {
-      inc += a.income_accr;
-      exp += a.staff_accr + a.dev_accr + a.other_accr;
+  const openSales = txns.filter((t) => t.kind === "sale" && t.amount_due > 0.005).sort((a, b) => (a.txn_date < b.txn_date ? -1 : 1));
+  const now = Date.now();
+  // Aging by invoice date (Xero due dates aren't synced).
+  const aging = [
+    { bucket: "0–30 days", lo: 0, hi: 30, value: 0 },
+    { bucket: "31–60 days", lo: 31, hi: 60, value: 0 },
+    { bucket: "61–90 days", lo: 61, hi: 90, value: 0 },
+    { bucket: "90+ days", lo: 91, hi: Infinity, value: 0 },
+  ];
+  for (const t of openSales) {
+    const days = Math.floor((now - Date.parse(t.txn_date)) / 86400_000);
+    const b = aging.find((x) => days >= x.lo && days <= x.hi) ?? aging[3];
+    b.value += t.amount_due;
+  }
+  // Customer table across the synced window.
+  const byCustomer = new Map<string, CustomerRow>();
+  for (const t of txns) {
+    if (t.kind !== "sale") continue;
+    if (!byCustomer.has(t.contact)) byCustomer.set(t.contact, { customer: t.contact, invoiced: 0, outstanding: 0, oldestOpen: null, daysOverdue: 0, openCount: 0 });
+    const r = byCustomer.get(t.contact)!;
+    r.invoiced += t.sub_total;
+    if (t.amount_due > 0.005) {
+      r.outstanding += t.amount_due;
+      r.openCount++;
+      if (!r.oldestOpen || t.txn_date < r.oldestOpen) r.oldestOpen = t.txn_date;
     }
   }
-  const net = inc - exp;
+  const customers = [...byCustomer.values()]
+    .map((r) => ({ ...r, daysOverdue: r.oldestOpen ? Math.floor((now - Date.parse(r.oldestOpen)) / 86400_000) : 0 }))
+    .sort((a, b) => b.outstanding - a.outstanding || b.invoiced - a.invoiced);
+  // Collections by billing month (accrual invoiced vs cash received vs live still-due).
+  const collections = [...actuals.entries()]
+    .filter(([, a]) => a.income_accr !== 0 || a.income !== 0)
+    .sort(([a], [b]) => (a < b ? 1 : -1))
+    .slice(0, 12)
+    .map(([m, a]) => ({ month: m, invoiced: a.income_accr, received: a.income, stillDue: debtors.get(m)?.due ?? null }));
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const openCustomer = c.req.query("c")?.trim() || null;
+  return c.html(
+    <ReceivablesPage openSales={openSales} customers={customers} aging={aging.map(({ bucket, value }) => ({ bucket, value }))}
+      collectedThisMonth={actuals.get(nowMonth)?.income ?? 0} collections={collections} openCustomer={openCustomer}
+      lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} />,
+  );
+});
 
-  // Deals
-  const linesByDeal = new Map<string, number>();
-  for (const l of dealLines) linesByDeal.set(l.commission_id, (linesByDeal.get(l.commission_id) ?? 0) + l.invoice);
-  const dealValue = (d: (typeof deals)[number]) => d.invoice_nett ?? linesByDeal.get(d.id) ?? 0;
-  const quotedDeals = deals.filter((d) => d.stage === "quote");
-  const invoicedValue = deals.filter((d) => d.stage === "invoice").reduce((s2, d) => s2 + dealValue(d), 0);
-  const commDue = deals.reduce((s2, d) => s2 + (commissionOf(d) ?? 0), 0);
+// ---------- Admin ----------
 
-  // Payroll latest month
-  const periods = [...new Set(payrollEntries2.map((p) => p.period))].sort();
-  const latest = periods.length ? periods[periods.length - 1] : null;
-  let pGross = 0;
-  let pPaye = 0;
-  let pPaid = 0;
-  if (latest) {
-    for (const pe of payrollEntries2) {
-      if (pe.period !== latest || pe.gross <= 0) continue;
-      pGross += pe.gross;
-      pPaye += pe.paye;
-      pPaid++;
-    }
-  }
+app.get("/app/admin", async (c) => {
+  const xero = await xeroState(c);
+  const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+  return c.html(<AdminPage xero={xero} msg={msg} lastSyncLabel={xero.lastSync ? formatDMYTime(xero.lastSync) : null} />);
+});
 
-  // HR
-  const hrActive = hrEmployees.filter((e) => !e.end_date);
-  const avgM = hrActive.length ? hrActive.reduce((s2, e) => s2 + tenure(e, now).months, 0) / hrActive.length : 0;
-  const totalWarnings = [...hrWarnings.values()].reduce((a, b) => a + b, 0);
-
-  // Expenses
-  const allExp = await listExpenses(c.env.DB);
-  const recurringMonthly = allExp.filter((e) => e.active).reduce((s2, e) => s2 + monthlyEquivalent(e), 0);
-
-  const stats: DashStats = {
-    cash: {
-      bankToday: derived.position.bankToday,
-      runwayMonths: derived.cf.kpis.runwayMonths,
-      runwayMonth: derived.cf.kpis.runwayMonth,
-      netPosition: derived.position.bankToday + derived.position.debtorsDue - derived.position.revolving,
-      anchored: true,
-    },
-    income: { fyLabel: fyLabel(fy), income: inc, net, nim: inc ? Math.round((net / inc) * 1000) / 10 : 0 },
-    deals: { quoted: quotedDeals.reduce((s2, d) => s2 + dealValue(d), 0), quotedN: quotedDeals.length, invoiced: invoicedValue, commDue },
-    payroll: { month: latest, nett: pGross - pPaye, gross: pGross, paid: pPaid },
-    expenses: { recurringMonthly, activeN: allExp.filter((e) => e.active).length, debtorsDue: derived.position.debtorsDue },
-    hr: { active: hrActive.length, avgTenure: `${Math.floor(avgM / 12)}y ${Math.round(avgM % 12)}m`, warnings: totalWarnings },
-  };
-  return c.html(<Dashboard s={stats} />);
+app.get("/app/admin/quality", async (c) => {
+  const { derived, snapshot, txns, hrEmployees } = await loadSnapshot(c.env);
+  const [dealLines, vendorBills, debtors, actualsError] = await Promise.all([
+    listAllLines(c.env.DB),
+    listAllVendorBills(c.env.DB),
+    listCfDebtors(c.env.DB),
+    getMeta(c.env.DB, "xero_actuals_error"),
+  ]);
+  void dealLines;
+  const checks = buildQualityReport({
+    cf: derived.cf,
+    actuals: derived.actuals,
+    boundary: snapshot.boundary,
+    txns,
+    debtorsDue: [...debtors.values()].reduce((t, d) => t + d.due, 0),
+    deals: derived.deals,
+    expenses: derived.allExpenses,
+    vendorBills,
+    payrollEmployees: derived.payrollEmps,
+    payrollEntries: derived.payrollEntries,
+    hrEmployees,
+    lastSync: derived.lastSync,
+    actualsError: actualsError || null,
+  });
+  return c.html(<DataQualityPage checks={checks} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
 });
 
 // ---------- Payroll ----------
@@ -471,6 +518,32 @@ async function loadCashflow(db: D1Database) {
   return { categories, entries, settings, actualsThrough: at, forecast };
 }
 
+/** One call that produces the canonical KPI snapshot every summary page uses. */
+async function loadSnapshot(env: Bindings) {
+  const derived = await loadDerived(env, "cash");
+  const [txns, dealLines, hrEmployees] = await Promise.all([
+    listXeroTxns(env.DB),
+    listAllLines(env.DB),
+    listHrEmployees(env.DB),
+  ]);
+  const snapshot = buildSnapshot({
+    cf: derived.cf,
+    actuals: derived.actuals,
+    boundary: derived.settings.actuals_through,
+    revolvingOwed: derived.position.revolving,
+    facilityLimit: derived.facilityLimit,
+    txns,
+    deals: derived.deals,
+    dealLines,
+    expenses: derived.allExpenses,
+    payrollEmployees: derived.payrollEmps,
+    payrollEntries: derived.payrollEntries,
+    hrEmployees,
+    lastSync: derived.lastSync,
+  });
+  return { derived, snapshot, txns, hrEmployees };
+}
+
 const OVERRIDE_GRP = "__override__";
 const OVERRIDE_NAMES = ["Income", "People", "Other expenses"];
 
@@ -537,11 +610,11 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
       adjById.get(e.category_id)?.values.set(e.period, e.amount);
     }
   }
-  // Deals pipeline: unpaid deals with an expected payment date land as forecast income.
+  // Deals pipeline: unpaid, forecast-included deals with an expected payment date land as forecast income.
   const deals = await listCommissions(env.DB);
   const dealValues = new Map<string, number>();
   for (const d of deals) {
-    if (d.stage === "paid" || !d.expected_payment || d.invoice_nett == null) continue;
+    if (d.stage === "paid" || !d.include_forecast || !d.expected_payment || d.invoice_nett == null) continue;
     const m = d.expected_payment.slice(0, 7);
     dealValues.set(m, (dealValues.get(m) ?? 0) + d.invoice_nett);
   }
@@ -570,29 +643,42 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     : undefined;
   const debtorsDue = [...debtors.values()].reduce((t, d) => t + d.due, 0);
   const revolving = Number((await getMeta(env.DB, "cf_revolving_owed")) ?? 0) || 0;
+  const facilityLimitRaw = await getMeta(env.DB, "cf_facility_limit");
+  const facilityLimit = facilityLimitRaw != null && facilityLimitRaw !== "" ? Number(facilityLimitRaw) || 0 : null;
+  const lastSync = await getMeta(env.DB, "xero_last_sync");
   const nowMonth2 = new Date().toISOString().slice(0, 7);
   const bankToday = cf.columns.find((col) => col.month === nowMonth2)?.balance ?? cf.kpis.currentCash;
   const position = { bankToday, debtorsDue, revolving, month: nowMonth2 };
-  return { settings, cf, syncNote, overrideCats, adjCats, entries, collections, position, dealValues };
+  return { settings, cf, actuals, syncNote, overrideCats, adjCats, entries, collections, position, dealValues, deals, facilityLimit, lastSync, payrollEmps, payrollEntries, allExpenses };
 }
 
-app.get("/app/accounts", async (c) => {
-  // Cashflow is cash-basis only: the accrual P&L (matching Xero) lives on the Income tab.
-  const { settings, cf, syncNote, collections, position } = await loadDerived(c.env, "cash");
+app.get("/app/finance/cash", async (c) => {
+  // Cash & Liquidity is cash-basis only: the accrual P&L that matches Xero lives on Profit & Loss.
+  const { derived, snapshot } = await loadSnapshot(c.env);
+  const { settings, cf, syncNote } = derived;
   const fyRaw = c.req.query("fy");
   let [fys, fy] = parseFy(cf.months, fyRaw);
-  // Default to the current fiscal year on first load; ?fy=all shows everything.
   if (fy == null && fyRaw !== "all") {
     const curFy = fiscalYearOf(new Date().toISOString().slice(0, 7));
     if (fys.includes(curFy)) fy = curFy;
   }
-  const visibleCollections = fy == null ? collections : collections.filter((r) => fiscalYearOf(r.month) === fy);
-  const lastSync = await getMeta(c.env.DB, "xero_last_sync");
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
-  return c.html(<CashflowDerivedPage cf={cf} settings={settings} fy={fy} fys={fys} collections={visibleCollections} position={position} syncNote={syncNote} lastSync={lastSync} msg={msg} saved={c.req.query("saved") === "1"} />);
+  return c.html(
+    <CashLiquidityPage cf={cf} settings={settings} fy={fy} fys={fys}
+      bankEstimate={snapshot.cash.bankEstimate} facility={snapshot.facility} liquidity={snapshot.liquidity}
+      risk={snapshot.cash.risk} fundingMonth={snapshot.cash.fundingMonth} next30Net={snapshot.cash.next30Net}
+      receivablesOutstanding={snapshot.receivables.outstanding}
+      syncNote={syncNote} lastSync={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={msg} />,
+  );
 });
+app.get("/app/accounts", (c) => c.redirect(`/app/finance/cash${c.req.query("fy") ? `?fy=${c.req.query("fy")}` : ""}`));
+app.get("/app/accounts/income", (c) => c.redirect("/app/finance/pnl"));
+app.get("/app/accounts/actuals", (c) => c.redirect("/app/finance/transactions"));
+app.get("/app/expenses", (c) => c.redirect("/app/finance/costs"));
+app.get("/app/expenses/monthly", (c) => c.redirect("/app/finance/costs/monthly"));
+app.get("/app/expenses/vendors", (c) => c.redirect("/app/admin/vendors"));
 
-app.get("/app/accounts/edit", async (c) => {
+app.get("/app/finance/forecast", async (c) => {
   // Ensure the three override rows exist (idempotent).
   const existing = await listCategories(c.env.DB);
   for (const name of OVERRIDE_NAMES) {
@@ -600,14 +686,24 @@ app.get("/app/accounts/edit", async (c) => {
       await createCategory(c.env.DB, { name, kind: name === "Income" ? "income" : "cost", grp: OVERRIDE_GRP });
     }
   }
-  const { settings, cf, overrideCats, adjCats, entries, dealValues } = await loadDerived(c.env);
+  const { derived, snapshot } = await loadSnapshot(c.env);
+  const { settings, cf, overrideCats, adjCats, entries, dealValues } = derived;
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
     map.get(e.category_id)!.set(e.period, { amount: e.amount, status: "forecast" });
   }
-  return c.html(<ForecastGridPage cf={cf} overrideCats={overrideCats} adjCats={adjCats} entries={map} dealValues={dealValues} boundary={settings.actuals_through} line={c.req.query("line")} saved={c.req.query("saved") === "1"} />);
+  const tRaw = String(c.req.query("t") ?? "overview");
+  const tab: ForecastTab = tRaw === "monthly" || tRaw === "assumptions" ? tRaw : "overview";
+  return c.html(
+    <ForecastPage cf={cf} settings={settings} overrideCats={overrideCats} adjCats={adjCats} entries={map}
+      dealValues={dealValues} boundary={settings.actuals_through} tab={tab}
+      facility={{ used: snapshot.facility.used, limit: snapshot.facility.limit }} bankEstimate={snapshot.cash.bankEstimate}
+      lastSync={derived.lastSync ? formatDMYTime(derived.lastSync) : null}
+      line={c.req.query("line")} saved={c.req.query("saved") === "1"} />,
+  );
 });
+app.get("/app/accounts/edit", (c) => c.redirect("/app/finance/forecast?t=monthly"));
 
 app.post("/app/accounts/save", async (c) => {
   const body = await c.req.parseBody();
@@ -633,7 +729,7 @@ app.post("/app/accounts/save", async (c) => {
   }
   // Keep the details drawer open when the save came from it.
   const line = String(body.line ?? "");
-  return c.redirect(`/app/accounts/edit?saved=1${line && /^[a-z_0-9-]+$/i.test(line) ? `&line=${line}` : ""}`);
+  return c.redirect(`/app/finance/forecast?t=monthly&saved=1${line && /^[a-z_0-9-]+$/i.test(line) ? `&line=${line}` : ""}`);
 });
 
 app.post("/app/accounts/actuals-through", async (c) => {
@@ -644,8 +740,7 @@ app.post("/app/accounts/actuals-through", async (c) => {
     // Keep stored entry statuses consistent with the new boundary.
     await c.env.DB.prepare("UPDATE cf_entries SET status = CASE WHEN period <= ? THEN 'actual' ELSE 'forecast' END").bind(p).run();
   }
-  const fyParam = /^\d{4}$/.test(String(b.fy ?? "")) ? `?fy=${b.fy}` : "";
-  return c.redirect(`/app/accounts${fyParam}`);
+  return c.redirect("/app/finance/forecast?t=assumptions&saved=1");
 });
 
 app.post("/app/accounts/category", async (c) => {
@@ -660,14 +755,14 @@ app.post("/app/accounts/category", async (c) => {
       is_recurring: String(b.is_recurring ?? "0") === "1",
     });
   }
-  return c.redirect("/app/accounts/edit");
+  return c.redirect("/app/finance/forecast?t=monthly&saved=1");
 });
 
 app.post("/app/accounts/category/delete", async (c) => {
   const b = await c.req.parseBody();
   const id = String(b.id ?? "");
   if (id) await deleteCategory(c.env.DB, id);
-  return c.redirect("/app/accounts/edit");
+  return c.redirect("/app/finance/forecast?t=monthly&saved=1");
 });
 
 app.post("/app/accounts/settings", async (c) => {
@@ -688,7 +783,11 @@ app.post("/app/accounts/settings", async (c) => {
     worst_cost_pct: n(b.worst_cost_pct, s.worst_cost_pct),
   });
   if (b.revolving_owed != null) await setMeta(c.env.DB, "cf_revolving_owed", String(parseMoney(String(b.revolving_owed))));
-  return c.redirect("/app/accounts?saved=1");
+  if (b.facility_limit != null) {
+    const lim = String(b.facility_limit).trim();
+    await setMeta(c.env.DB, "cf_facility_limit", lim === "" ? "" : String(parseMoney(lim)));
+  }
+  return c.redirect("/app/finance/forecast?t=assumptions&saved=1");
 });
 
 app.get("/app/accounts/export.csv", async (c) => {
@@ -897,7 +996,7 @@ async function xeroState(c: any): Promise<import("./lib/xero").XeroState> {
   };
 }
 
-app.get("/app/expenses", async (c) => {
+app.get("/app/finance/costs", async (c) => {
   const [expenses, xero] = await Promise.all([listExpenses(c.env.DB), xeroState(c)]);
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
   const pageN = Number(c.req.query("page"));
@@ -938,7 +1037,7 @@ app.post("/app/expenses/add", async (c) => {
       notes: String(b.notes ?? "").trim() || null,
     });
   }
-  return c.redirect("/app/expenses");
+  return c.redirect("/app/finance/costs");
 });
 
 function expenseListQs(b: Record<string, unknown>): string {
@@ -954,19 +1053,19 @@ app.post("/app/expenses/frequency", async (c) => {
   const id = String(b.id ?? "");
   const freq = FREQUENCIES.find((f) => f.key === String(b.frequency));
   if (id && freq) await setExpenseFrequency(c.env.DB, id, freq.key, freq.months);
-  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
+  return c.redirect(`/app/finance/costs?${expenseListQs(b)}`);
 });
 
 app.post("/app/expenses/toggle", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await toggleExpense(c.env.DB, String(b.id));
-  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
+  return c.redirect(`/app/finance/costs?${expenseListQs(b)}`);
 });
 
 app.post("/app/expenses/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteExpense(c.env.DB, String(b.id));
-  return c.redirect(`/app/expenses?${expenseListQs(b)}`);
+  return c.redirect(`/app/finance/costs?${expenseListQs(b)}`);
 });
 
 app.get("/app/expenses/export.csv", async (c) => {
@@ -994,7 +1093,7 @@ function redirectUri(c: any): string {
 }
 
 app.get("/app/xero/connect", async (c) => {
-  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
+  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/admin");
   const state = crypto.randomUUID();
   await setSignedCookie(c, "xero_state", state, c.env.SESSION_SECRET, {
     path: "/",
@@ -1008,12 +1107,12 @@ app.get("/app/xero/connect", async (c) => {
 
 app.get("/app/xero/callback", async (c) => {
   const err = c.req.query("error");
-  if (err) return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero: ${err}`)}`);
+  if (err) return c.redirect(`/app/admin?msg=${encodeURIComponent(`Xero: ${err}`)}`);
   const code = c.req.query("code");
   const state = c.req.query("state");
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, "xero_state");
   if (!code || !state || !expected || state !== expected) {
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero connection failed (state mismatch) — try again.")}`);
+    return c.redirect(`/app/admin?msg=${encodeURIComponent("Xero connection failed (state mismatch) — try again.")}`);
   }
   try {
     const tokens = await exchangeCode(c.env.XERO_CLIENT_ID!.trim(), c.env.XERO_CLIENT_SECRET!.trim(), code, redirectUri(c));
@@ -1022,9 +1121,9 @@ app.get("/app/xero/callback", async (c) => {
     if (conns.length === 0) throw new Error("no organisations authorised");
     await setMeta(c.env.DB, "xero_tenant_id", conns[0].tenantId);
     await setMeta(c.env.DB, "xero_org_name", conns[0].tenantName);
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Connected to ${conns[0].tenantName}. Click Sync to pull repeating bills.`)}`);
+    return c.redirect(`/app/admin?msg=${encodeURIComponent(`Connected to ${conns[0].tenantName}. Run a sync to pull the books.`)}`);
   } catch (e) {
-    return c.redirect(`/app/expenses?msg=${encodeURIComponent(`Xero connection failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
+    return c.redirect(`/app/admin?msg=${encodeURIComponent(`Xero connection failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
 });
 
@@ -1032,7 +1131,7 @@ app.post("/app/xero/disconnect", async (c) => {
   for (const k of ["xero_refresh_token", "xero_access_token", "xero_access_expires", "xero_tenant_id", "xero_org_name"]) {
     await c.env.DB.prepare("DELETE FROM app_meta WHERE key = ?").bind(k).run();
   }
-  return c.redirect(`/app/expenses?msg=${encodeURIComponent("Xero disconnected.")}`);
+  return c.redirect(`/app/admin?msg=${encodeURIComponent("Xero disconnected.")}`);
 });
 
 const SYNC_MONTHS_BACK = 6;
@@ -1080,13 +1179,17 @@ async function runXeroSync(env: Bindings): Promise<string> {
     let rule = rules.get(v.key);
     // Persist automatic exclusions so they're visible and overridable on the review page.
     if (!rule) {
-      const reason = autoExcludeReason(v.name, names);
+      // Tax is never an operating cost: SARS has its own line in the forecast.
+      const reason = v.key === "sars" || /^SARS\b/i.test(v.name)
+        ? "tax — tracked on the forecast's SARS line, not as a recurring cost"
+        : autoExcludeReason(v.name, names);
       if (reason) {
         await setVendorRule(env.DB, v.key, v.name, "exclude", reason);
         rule = { vendor_key: v.key, name: v.name, rule: "exclude", reason };
       }
     }
-    if (rule?.rule === "exclude") {
+    if (rule?.rule === "exclude" || v.key === "sars") {
+      // SARS is enforced out of operating costs even if a stale rule says track.
       await deleteExpenseByXeroId(env.DB, `vendor:${v.key}`);
       excluded++;
       continue;
@@ -1190,7 +1293,7 @@ app.post("/app/expenses/sync", async (c) => {
   }
 });
 
-app.get("/app/accounts/actuals", async (c) => {
+app.get("/app/finance/transactions", async (c) => {
   const txns = await listXeroTxns(c.env.DB);
   const monthsPresent = [...new Set(txns.map((t) => t.txn_date.slice(0, 7)))];
   const fys = [...new Set(monthsPresent.map(fiscalYearOf))].sort((a, b) => a - b);
@@ -1215,6 +1318,16 @@ app.get("/app/accounts/actuals", async (c) => {
 const STAFF_RE = /salar|wage|payroll|staff|bonus|\buif\b|\bpaye\b|\bsdl\b|medical aid|pension|leave pay/i;
 const DEV_RE = /developer|contractor|freelanc|consult/i;
 
+// P&L cost categories — plain-language buckets for "where does the money go".
+const COST_CATEGORIES: { key: string; title: string; re: RegExp }[] = [
+  { key: "employees", title: "Employees", re: STAFF_RE },
+  { key: "contractors", title: "Contractors / development", re: DEV_RE },
+  { key: "infra", title: "Infrastructure & hosting", re: /hosting|server|domain|cloud|vps|backup|data ?cent/i },
+  { key: "software", title: "Software & subscriptions", re: /software|subscript|licen|saas/i },
+  { key: "marketing", title: "Sales & marketing", re: /marketing|advertis|promo|entertain/i },
+  { key: "admin", title: "General & admin", re: /rent|electric|water|insurance|bank charge|accounting|legal|security|telephone|internet|travel|vehicle|motor|repairs|office|uniform|welfare|training|interest|computer/i },
+];
+
 function monthsBetweenIncl(a: string, b: string): number {
   return (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + (Number(b.slice(5, 7)) - Number(a.slice(5, 7))) + 1;
 }
@@ -1225,7 +1338,7 @@ function lastDayISO(period: string): string {
   return `${period}-${String(last).padStart(2, "0")}`;
 }
 
-app.get("/app/accounts/income", async (c) => {
+app.get("/app/finance/pnl", async (c) => {
   const nowMonth = new Date().toISOString().slice(0, 7);
   const curFy = fiscalYearOf(nowMonth);
   const fys = [curFy - 1, curFy];
@@ -1271,25 +1384,46 @@ app.get("/app/accounts/income", async (c) => {
       : `Couldn't load the P&L from Xero: ${msg}`;
   }
 
-  // Bucket expense accounts: staff / dev & freelancers / everything else.
+  // Bucket expense accounts into plain-language cost categories.
   const zeros = pnl.months.map(() => 0);
   const buckets: ExpenseBucket[] = [
-    { key: "staff", title: "Staff", rows: [], total: [...zeros] },
-    { key: "dev", title: "Dev / freelancers", rows: [], total: [...zeros] },
-    { key: "other", title: "Everything else", rows: [], total: [...zeros] },
+    ...COST_CATEGORIES.map((cc) => ({ key: cc.key, title: cc.title, rows: [] as PnLRow[], total: [...zeros] })),
+    { key: "other", title: "Other", rows: [], total: [...zeros] },
   ];
   const allExpenseRows: PnLRow[] = [...pnl.cosRows, ...pnl.opexRows];
   for (const r of allExpenseRows) {
-    const b = STAFF_RE.test(r.name) ? buckets[0] : DEV_RE.test(r.name) ? buckets[1] : buckets[2];
+    const cc = COST_CATEGORIES.find((x) => x.re.test(r.name));
+    const b = cc ? buckets.find((x) => x.key === cc.key)! : buckets[buckets.length - 1];
     b.rows.push(r);
     r.values.forEach((v, i) => (b.total[i] += v));
   }
-  return c.html(<IncomePage fy={fy} fys={fys} pnl={pnl} prior={prior} buckets={buckets} error={error} />);
+
+  // Canonical-store reconciliation: a successful live fetch refreshes the
+  // synced accrual figures, so the Overview and this page can never drift.
+  if (!error && pnl.months.length) {
+    const accr = pnl.months.map((m, i) => {
+      let staff = 0;
+      let dev = 0;
+      let other = 0;
+      for (const r of allExpenseRows) {
+        const v = r.values[i] ?? 0;
+        if (STAFF_RE.test(r.name)) staff += v;
+        else if (DEV_RE.test(r.name)) dev += v;
+        else other += v;
+      }
+      return { month: m, income_accr: pnl.incomeTotal[i], staff_accr: staff, dev_accr: dev, other_accr: other };
+    });
+    c.executionCtx.waitUntil(updateCfAccruals(c.env.DB, accr).catch(() => {}));
+  }
+
+  const lastSync = await getMeta(c.env.DB, "xero_last_sync");
+  return c.html(<IncomePage fy={fy} fys={fys} pnl={pnl} prior={prior} buckets={buckets} lastSync={lastSync ? formatDMYTime(lastSync) : null} error={error} />);
 });
 
 // ----- Deals (né Commissions) -----
 
-app.get("/app/accounts/commissions", (c) => c.redirect("/app/accounts/deals"));
+app.get("/app/accounts/commissions", (c) => c.redirect("/app/pipeline"));
+app.get("/app/accounts/deals", (c) => c.redirect("/app/pipeline"));
 
 /**
  * Self-migration fallback: Cloudflare's D1 HTTP API (used by wrangler
@@ -1315,7 +1449,7 @@ async function ensureCommissionRefColumns(db: D1Database): Promise<void> {
   }
 }
 
-app.get("/app/accounts/deals", async (c) => {
+app.get("/app/pipeline", async (c) => {
   await ensureCommissionRefColumns(c.env.DB);
   const [deals, lines, employees] = await Promise.all([
     listCommissions(c.env.DB),
@@ -1354,9 +1488,9 @@ app.post("/app/accounts/deals/add", async (c) => {
       invoice_nett: String(b.invoice_nett ?? "").trim() ? parseMoney(String(b.invoice_nett)) : null,
       comm_amount: String(b.comm_amount ?? "").trim() ? parseMoney(String(b.comm_amount)) : null,
     });
-    return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
+    return c.redirect(`/app/pipeline?open=${id}&saved=1`);
   }
-  return c.redirect("/app/accounts/deals");
+  return c.redirect("/app/pipeline");
 });
 
 app.post("/app/accounts/deals/amounts", async (c) => {
@@ -1365,7 +1499,7 @@ app.post("/app/accounts/deals/amounts", async (c) => {
     const num = (v: unknown) => (String(v ?? "").trim() === "" ? null : parseMoney(String(v)));
     await setCommissionAmounts(c.env.DB, String(b.id), num(b.invoice_nett), num(b.comm_amount), num(b.comm_pct));
   }
-  return c.redirect("/app/accounts/deals");
+  return c.redirect("/app/pipeline");
 });
 
 app.post("/app/accounts/deals/update", async (c) => {
@@ -1385,7 +1519,7 @@ app.post("/app/accounts/deals/update", async (c) => {
       expected_payment: parseDateInput(String(b.expected_payment)),
     });
   }
-  return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
+  return c.redirect(`/app/pipeline?open=${id}&saved=1`);
 });
 
 app.post("/app/accounts/deals/expected", async (c) => {
@@ -1396,7 +1530,13 @@ app.post("/app/accounts/deals/expected", async (c) => {
       .bind(parseDateInput(String(b.expected_payment)), id)
       .run();
   }
-  return c.redirect(`/app/accounts/deals?open=${id}&saved=1`);
+  return c.redirect(`/app/pipeline?open=${id}&saved=1`);
+});
+
+app.post("/app/accounts/deals/forecast-flag", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await setIncludeForecast(c.env.DB, String(b.id), String(b.include) === "1");
+  return c.redirect("/app/pipeline");
 });
 
 app.post("/app/accounts/deals/stage", async (c) => {
@@ -1404,13 +1544,13 @@ app.post("/app/accounts/deals/stage", async (c) => {
   if (b.id && COMM_STAGES.includes(String(b.stage) as any)) {
     await setCommissionStage(c.env.DB, String(b.id), String(b.stage));
   }
-  return c.redirect("/app/accounts/deals");
+  return c.redirect("/app/pipeline");
 });
 
 app.post("/app/accounts/deals/delete", async (c) => {
   const b = await c.req.parseBody();
   if (b.id) await deleteCommission(c.env.DB, String(b.id));
-  return c.redirect("/app/accounts/deals");
+  return c.redirect("/app/pipeline");
 });
 
 app.post("/app/accounts/deals/line/add", async (c) => {
@@ -1458,7 +1598,7 @@ app.get("/app/accounts/deals/export.csv", async (c) => {
 
 // ----- Monthly expense log -----
 
-app.get("/app/expenses/monthly", async (c) => {
+app.get("/app/finance/costs/monthly", async (c) => {
   const [bills, rules, names, allExpenses] = await Promise.all([
     listAllVendorBills(c.env.DB),
     listVendorRules(c.env.DB),
@@ -1535,13 +1675,13 @@ app.get("/app/expenses/monthly", async (c) => {
 
 // ----- Vendor review -----
 
-app.get("/app/expenses/vendors", async (c) => {
-  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/expenses");
+app.get("/app/admin/vendors", async (c) => {
+  if (!c.env.XERO_CLIENT_ID || !c.env.XERO_CLIENT_SECRET) return c.redirect("/app/admin");
   try {
     const token = await ensureAccessToken(c.env.DB, c.env.XERO_CLIENT_ID.trim(), c.env.XERO_CLIENT_SECRET.trim());
-    if (!token) return c.redirect(`/app/expenses?msg=${encodeURIComponent("Connect Xero first.")}`);
+    if (!token) return c.redirect(`/app/admin?msg=${encodeURIComponent("Connect Xero first.")}`);
     const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
-    if (!tenantId) return c.redirect(`/app/expenses?msg=${encodeURIComponent("No Xero organisation — reconnect.")}`);
+    if (!tenantId) return c.redirect(`/app/admin?msg=${encodeURIComponent("No Xero organisation — reconnect.")}`);
     const [summary, rules, names] = await Promise.all([
       fetchVendorBillSummary(token, tenantId, SYNC_MONTHS_BACK),
       listVendorRules(c.env.DB),
@@ -1580,7 +1720,7 @@ app.post("/app/expenses/vendor-rule", async (c) => {
       await clearVendorRule(c.env.DB, key);
     }
   }
-  return c.redirect("/app/expenses/vendors");
+  return c.redirect("/app/admin/vendors");
 });
 
 // --- helpers -------------------------------------------------------------

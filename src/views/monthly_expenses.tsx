@@ -2,13 +2,13 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout";
 import type { VendorBill } from "../data/expenses";
 import { formatZAR } from "../lib/money";
+import { FinanceTabs } from "./income";
 import { label, formatDMY } from "../lib/period";
 
 export const ExpenseTabs: FC<{ active: "recurring" | "monthly" | "vendors" }> = ({ active }) => (
-  <div class="segmented" style="margin:14px 0 4px">
-    <a href="/app/expenses" class={active === "recurring" ? "seg active" : "seg"}>Recurring</a>
-    <a href="/app/expenses/monthly" class={active === "monthly" ? "seg active" : "seg"}>Monthly log</a>
-    <a href="/app/expenses/vendors" class={active === "vendors" ? "seg active" : "seg"}>Vendor review</a>
+  <div class="segmented" style="margin:8px 0 4px">
+    <a href="/app/finance/costs" class={active === "recurring" ? "seg active" : "seg"}>Recurring costs</a>
+    <a href="/app/finance/costs/monthly" class={active === "monthly" ? "seg active" : "seg"}>Spend detail</a>
   </div>
 );
 
@@ -38,7 +38,7 @@ export const MonthlyExpensesPage: FC<{
   const selTotal = groups.reduce((s, g) => s + g.total, 0) + manualItems.reduce((s, i) => s + i.amount, 0);
 
   return (
-    <Layout title="Monthly expenses" authed section="expenses" wide>
+    <Layout title="Monthly expenses" authed section="finance" wide>
       <div class="container">
         <div class="row spread">
           <div>
@@ -51,6 +51,7 @@ export const MonthlyExpensesPage: FC<{
           </div>
         </div>
 
+        <FinanceTabs active="costs" />
         <ExpenseTabs active="monthly" />
 
         <div class="callout section-block">
@@ -79,7 +80,7 @@ export const MonthlyExpensesPage: FC<{
                 {months.map((m) => (
                   <tr style={selected === m.month ? "background:rgba(79,140,255,.08)" : ""}>
                     <td style="text-align:left">
-                      <a href={`/app/expenses/monthly?m=${m.month}`} style="font-weight:600">
+                      <a href={`/app/finance/costs/monthly?m=${m.month}`} style="font-weight:600">
                         {label(m.month)}{m.month === currentMonth ? <span class="muted"> · partial</span> : ""}
                       </a>
                     </td>
@@ -88,7 +89,7 @@ export const MonthlyExpensesPage: FC<{
                     <td class="num">{formatZAR(m.billTotal)}</td>
                     <td class="num">{formatZAR(m.manualTotal)}</td>
                     <td class="num"><strong>{formatZAR(m.total)}</strong></td>
-                    <td><a class="btn btn-sm" href={`/app/expenses/monthly?m=${m.month}`}>{selected === m.month ? "Viewing" : "View log"}</a></td>
+                    <td><a class="btn btn-sm" href={`/app/finance/costs/monthly?m=${m.month}`}>{selected === m.month ? "Viewing" : "View log"}</a></td>
                   </tr>
                 ))}
               </tbody>
@@ -100,7 +101,7 @@ export const MonthlyExpensesPage: FC<{
           <div class="section-block">
             <div class="row spread">
               <h3 style="margin:0">{label(selected)} — full log · {formatZAR(selTotal)}</h3>
-              <a class="btn btn-sm" href="/app/expenses/monthly">Close</a>
+              <a class="btn btn-sm" href="/app/finance/costs/monthly">Close</a>
             </div>
             {manualItems.length > 0 ? (
               <div class="card" style="margin-top:12px">
