@@ -97,7 +97,8 @@ export const CommissionsPage: FC<{
         <div class="kpis section-block">
           <Kpi label="Ledger invoiced" value={formatZAR(totInvoiced)} sub={`${formatZAR(totInvoiced - totPaid)} outstanding`} />
           <Kpi label="Ledger paid" value={formatZAR(totPaid)} />
-          <Kpi label="Commission earned" value={formatZAR(commEarnedTot)} sub={`invoiced deals · estimated ${formatZAR(commEstTot)} on quotes/POs`} tone="pos" />
+          <Kpi label="Commission owed to staff" value={formatZAR(commEarnedTot)} tone={commEarnedTot > 0 ? "warn" : ""}
+            sub={`on invoiced/paid deals · potential ${formatZAR(commEstTot)} on quotes/POs`} />
           <Kpi label="Open deals" value={String(openDeals)} sub={`${visibleDeals.length} shown`} />
         </div>
 
@@ -117,10 +118,10 @@ export const CommissionsPage: FC<{
 
         {byStaff.size > 0 ? (
           <div class="card section-block">
-            <h3>Commission earned by staff member — invoiced deals only</h3>
+            <h3>Commission owed per staff member — invoiced/paid deals only</h3>
             <div class="row" style="gap:24px;flex-wrap:wrap">
               {[...byStaff.entries()].sort((a, b) => b[1] - a[1]).map(([name, amt]) => (
-                <div><strong>{name}</strong> <span class="pos">{formatZAR(amt)}</span></div>
+                <div><strong>{name}</strong> <span class="warn">{formatZAR(amt)}</span></div>
               ))}
             </div>
           </div>
@@ -191,7 +192,7 @@ export const CommissionsPage: FC<{
                         title={d.comm_amount != null ? "Manually set — clear to return to % × nett" : "Auto: % × invoice nett — type to override"}
                         style="width:90px;text-align:right" />
                       {(() => { const st = commissionState(d); return st === "none" ? null :
-                        <div class="cellhint">{st === "estimated" ? "estimated" : st === "earned" ? "earned" : "payable"}</div>; })()}
+                        <div class="cellhint">{st === "estimated" ? "potential" : st === "earned" ? "owed — invoiced" : "payable — deal paid"}</div>; })()}
                     </td>
                     <td>
                       <form method="post" action="/app/accounts/deals/delete" style="margin:0"

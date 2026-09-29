@@ -102,7 +102,7 @@ export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: st
             <div class="row spread"><h2 style="margin:0;font-size:16px">🤝 Pipeline</h2><span class="muted" style="font-size:12px">open →</span></div>
             <div class="muted" style="font-size:13px;margin-top:8px">
               Potential {formatZAR(s.pipeline.potential)} · committed {formatZAR(s.pipeline.committed)} · billed {formatZAR(s.pipeline.billed)}
-              <br />commission earned {formatZAR(s.pipeline.commissionEarned)}{s.pipeline.commissionEstimated ? ` · estimated ${formatZAR(s.pipeline.commissionEstimated)}` : ""}
+              <br />commission owed to staff {formatZAR(s.pipeline.commissionEarned)}{s.pipeline.commissionEstimated ? ` · potential ${formatZAR(s.pipeline.commissionEstimated)}` : ""}
             </div>
           </a>
           <a class="card" href="/app/payroll" style="color:var(--text);display:block">
