@@ -444,3 +444,82 @@ export async function fetchDebtorCohorts(accessToken: string, tenantId: string, 
   }
   return [...byMonth.values()].sort((a, b) => (a.month < b.month ? -1 : 1));
 }
+
+// ---- Raw actuals: every sale, bill and spend-money txn -----------------------
+
+export type XeroTxn = {
+  id: string;
+  kind: "sale" | "bill" | "spend";
+  date: string; // YYYY-MM-DD
+  contact: string;
+  reference: string | null;
+  subTotal: number; // excl VAT
+  total: number; // incl VAT
+  amountDue: number;
+  status: string;
+};
+
+/**
+ * Fetch every approved sales invoice (ACCREC), supplier bill (ACCPAY) and
+ * spend-money bank transaction since the window start — unfiltered, so the
+ * Actuals view balances. Paged; calls run sequentially (Xero concurrency).
+ */
+export async function fetchActualTxns(accessToken: string, tenantId: string, monthsBack = 18): Promise<{ since: string; txns: XeroTxn[] }> {
+  const now = new Date();
+  const sinceM = now.getUTCMonth() + 1 - monthsBack;
+  const y = sinceM >= 1 ? now.getUTCFullYear() : now.getUTCFullYear() - Math.ceil((1 - sinceM) / 12);
+  const m = ((sinceM - 1 + 12 * 10) % 12) + 1;
+  const since = `${y}-${String(m).padStart(2, "0")}-01`;
+  const hdrs = { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" };
+  const currentMonth = now.toISOString().slice(0, 7);
+
+  const txns: XeroTxn[] = [];
+  const push = (kind: XeroTxn["kind"], id: unknown, row: any, ref: string | null) => {
+    const date = parseXeroDate(row.Date) ?? "";
+    const month = date.slice(0, 7);
+    if (!date || month < since.slice(0, 7) || month > currentMonth) return; // guard mis-typed dates
+    txns.push({
+      id: String(id),
+      kind,
+      date,
+      contact: String(row.Contact?.Name ?? "").trim() || "(no contact)",
+      reference: ref,
+      subTotal: Number(row.SubTotal ?? row.Total ?? 0),
+      total: Number(row.Total ?? 0),
+      amountDue: Number(row.AmountDue ?? 0),
+      status: String(row.Status ?? ""),
+    });
+  };
+
+  for (const type of ["ACCREC", "ACCPAY"] as const) {
+    for (let page = 1; page <= 30; page++) {
+      const q = new URLSearchParams({
+        where: `Type=="${type}" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
+        page: String(page),
+      });
+      const res = await fetch(`https://api.xero.com/api.xro/2.0/Invoices?${q.toString()}`, { headers: hdrs });
+      if (!res.ok) throw new Error(`Xero Invoices ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const list = ((await res.json()) as any).Invoices ?? [];
+      for (const inv of list) {
+        if (inv.Status !== "AUTHORISED" && inv.Status !== "PAID") continue;
+        push(type === "ACCREC" ? "sale" : "bill", inv.InvoiceID, inv, inv.InvoiceNumber ? String(inv.InvoiceNumber) : inv.Reference ? String(inv.Reference) : null);
+      }
+      if (list.length < 100) break;
+    }
+  }
+  for (let page = 1; page <= 30; page++) {
+    const q = new URLSearchParams({
+      where: `Type=="SPEND" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
+      page: String(page),
+    });
+    const res = await fetch(`https://api.xero.com/api.xro/2.0/BankTransactions?${q.toString()}`, { headers: hdrs });
+    if (!res.ok) break; // tolerate missing scope — invoices-only actuals
+    const list = ((await res.json()) as any).BankTransactions ?? [];
+    for (const bt of list) {
+      if (bt.Status !== "AUTHORISED") continue;
+      push("spend", bt.BankTransactionID, bt, bt.Reference ? String(bt.Reference) : null);
+    }
+    if (list.length < 100) break;
+  }
+  return { since, txns };
+}

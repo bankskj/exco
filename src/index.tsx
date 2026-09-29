@@ -34,12 +34,14 @@ import { CashflowDerivedPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
 import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, type PnL, type PnLRow } from "./lib/xero";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
 import { CashflowDashboard } from "./views/cashflow";
 import { ForecastGridPage, type EntryMap } from "./views/cashflow_edit";
+import { ActualsPage } from "./views/actuals";
+import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
 import {
   listEmployees,
   listPayrollEntries,
@@ -70,7 +72,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, parseDateInput, addMonths } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, formatDMYTime, parseDateInput, addMonths } from "./lib/period";
 
 /** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
 function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
@@ -1163,6 +1165,13 @@ async function runXeroSync(env: Bindings): Promise<string> {
     env.DB,
     summary.flatMap((v) => v.bills.map((b) => ({ vendor_key: v.key, vendor_name: v.name, bill_date: b.date, amount: b.amount, reference: b.reference }))),
   );
+  // Raw actuals for the Actuals tab — every sale, bill and spend txn.
+  try {
+    const { since, txns } = await fetchActualTxns(token, tenantId);
+    await replaceXeroTxns(env.DB, since, txns);
+  } catch (e) {
+    await setMeta(env.DB, "xero_actuals_error", e instanceof Error ? e.message : "unknown");
+  }
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
   const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.`;
   await setMeta(env.DB, "xero_last_sync_result", msg);
@@ -1178,6 +1187,21 @@ app.post("/app/expenses/sync", async (c) => {
   } catch (e) {
     return c.redirect(`${back}?msg=${encodeURIComponent(`Xero sync failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }
+});
+
+app.get("/app/accounts/actuals", async (c) => {
+  const txns = await listXeroTxns(c.env.DB);
+  const monthsPresent = [...new Set(txns.map((t) => t.txn_date.slice(0, 7)))];
+  const fys = [...new Set(monthsPresent.map(fiscalYearOf))].sort((a, b) => a - b);
+  const fyRaw = c.req.query("fy");
+  let fy = fyRaw && fyRaw !== "all" && /^\d{4}$/.test(fyRaw) ? Number(fyRaw) : null;
+  if (fy == null && fyRaw !== "all") {
+    const curFy = fiscalYearOf(new Date().toISOString().slice(0, 7));
+    if (fys.includes(curFy)) fy = curFy;
+  }
+  const open = /^\d{4}-\d{2}$/.test(String(c.req.query("m"))) ? String(c.req.query("m")) : null;
+  const lastSyncIso = await getMeta(c.env.DB, "xero_last_sync");
+  return c.html(<ActualsPage txns={txns} fy={fy} fys={fys} open={open} lastSync={lastSyncIso ? formatDMYTime(lastSyncIso) : null} />);
 });
 
 // ----- Income dashboard (Xero P&L) -----
