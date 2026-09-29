@@ -310,6 +310,7 @@ app.get("/app/projects", async (c) => {
     }
   }
   const openName = c.req.query("open")?.trim() || null;
+  const ledgerFlag = c.req.query("ledger") === "1";
   // Same-named projects are grouped — load detail across every member.
   const memberIds = openName ? projects.filter((p) => p.name.trim() === openName).map((p) => p.id) : [];
   const [tasks, snapshots] = openName
@@ -318,7 +319,7 @@ app.get("/app/projects", async (c) => {
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
     <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodLabel={periodLabel}
-      baselineMissing={baselineMissing} openName={openName} tasks={tasks} snapshots={snapshots}
+      baselineMissing={baselineMissing} openName={openName} ledger={ledgerFlag} tasks={tasks} snapshots={snapshots}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
   );
 });

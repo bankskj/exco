@@ -45,11 +45,12 @@ export const ProjectsPage: FC<{
   periodLabel: string | null;
   baselineMissing: boolean;
   openName: string | null;
+  ledger: boolean; // right-drawer ledger view for the open project
   tasks: XeroProjectTask[]; // tasks across the open group
   snapshots: ProjectSnapshot[]; // month-summed snapshots across the open group
   lastSyncLabel: string | null;
   scopeError?: string | null;
-}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, tasks, snapshots, lastSyncLabel, scopeError }) => {
+}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, ledger, tasks, snapshots, lastSyncLabel, scopeError }) => {
   const valOf = (p: XeroProject) => periodValues?.get(p.id) ?? { charge: charge(p), invoiced: p.invoiced };
   const visible = projects.filter((p) =>
     filter === "all" ? true : filter === "closed" ? p.status !== "INPROGRESS" : p.status === "INPROGRESS",
@@ -71,11 +72,12 @@ export const ProjectsPage: FC<{
     .sort((a, b) => (a.inProgress > 0 === (b.inProgress > 0) ? a.name.localeCompare(b.name) : a.inProgress > 0 ? -1 : 1));
   const tot = rows.reduce((a, g) => ({ charge: a.charge + g.charge, invoiced: a.invoiced + g.invoiced }), { charge: 0, invoiced: 0 });
   const open = openName ? rows.find((g) => g.name === openName) ?? null : null;
-  const qs = (over: { f?: string; p?: string; open?: string | null }) => {
+  const qs = (over: { f?: string; p?: string; open?: string | null; ledger?: boolean }) => {
     const f = over.f ?? filter;
     const pd = over.p ?? period;
     const o = over.open === undefined ? openName : over.open;
-    return `/app/projects?f=${f}&p=${pd}${o ? `&open=${encodeURIComponent(o)}` : ""}`;
+    const lg = over.ledger ?? false;
+    return `/app/projects?f=${f}&p=${pd}${o ? `&open=${encodeURIComponent(o)}` : ""}${o && lg ? "&ledger=1" : ""}`;
   };
 
   const deltas = snapshots.map((s, i) => ({
@@ -207,19 +209,44 @@ export const ProjectsPage: FC<{
         ) : null}
       </div>
 
-      {open ? (
+      {open && ledger ? (
         <>
-          <a href={qs({ open: null })} class="drawer-overlay" aria-label="Close details"></a>
+          <a href={qs({ ledger: false })} class="drawer-overlay" aria-label="Close ledger"></a>
           <aside class="drawer">
             <div class="row spread" style="align-items:flex-start">
-              <h3 style="text-transform:none;font-size:17px;color:var(--text)">{open.name}</h3>
-              <a href={qs({ open: null })} class="btn btn-sm" title="Close">✕</a>
+              <h3 style="text-transform:none;font-size:17px;color:var(--text)">{open.name} — ledger</h3>
+              <a href={qs({ ledger: false })} class="btn btn-sm" title="Close">✕</a>
             </div>
             <p class="muted" style="font-size:12px;margin:2px 0 14px">
-              {open.members.length > 1 ? `${open.members.length} Xero projects combined · ` : ""}
-              {open.inProgress > 0 ? `${open.inProgress} in progress` : "closed"} · project-to-date figures
+              Monthly ledger built from sync snapshots{open.members.length > 1 ? `, combined across ${open.members.length} Xero projects` : ""}.
+              Charge and invoiced movement per month, with the running profit.
             </p>
-            <GroupDrill g={open} tasks={tasks} deltas={deltas} />
+            {deltas.length === 0 ? (
+              <p class="muted" style="font-size:13px">No snapshots recorded yet — run a Xero sync.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Month</th><th style="text-align:right">Charge +</th><th style="text-align:right">Invoiced +</th><th style="text-align:right">Running profit</th></tr>
+                </thead>
+                <tbody>
+                  {deltas.map((d) => {
+                    const run = d.cumInvoiced - d.cumCharge;
+                    return (
+                      <tr>
+                        <td>{label(d.month)}{d.charge == null ? <span class="cellhint"> opening</span> : null}</td>
+                        <td class="num">{d.charge == null ? formatZAR(d.cumCharge) : formatZAR(d.charge)}</td>
+                        <td class="num">{d.invoiced == null ? formatZAR(d.cumInvoiced) : formatZAR(d.invoiced)}</td>
+                        <td class={`num ${run < 0 ? "neg" : "pos"}`}>{formatZAR(run)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            <p class="muted" style="font-size:12px;margin-top:12px">
+              The opening line carries all history up to the first snapshot; each later line is that month's movement.
+              History accumulates automatically with every monthly sync.
+            </p>
           </aside>
         </>
       ) : null}
@@ -237,24 +264,25 @@ const Line: FC<{ name: string; value: string; tone?: string; strong?: boolean }>
 const GroupDrill: FC<{
   g: ProjectGroup;
   tasks: XeroProjectTask[];
-  deltas: { month: string; charge: number | null; invoiced: number | null; cumCharge: number; cumInvoiced: number }[];
-}> = ({ g, tasks, deltas }) => {
+  ledgerHref: string;
+}> = ({ g, tasks, ledgerHref }) => {
   const estimate = g.members.reduce((s, p) => s + (p.estimate ?? 0), 0);
   return (
     <div>
-      <div class="card" style="padding:14px 16px;margin-bottom:16px">
-        <Line name="Charge (bills & spend assigned in Xero)" value={formatZAR(g.charge)} />
-        <Line name="Invoiced" value={formatZAR(g.invoiced)} />
-        {estimate > 0 ? <Line name="Estimate" value={formatZAR(estimate)} /> : null}
-        <Line name="Profit" value={formatZAR(g.invoiced - g.charge)} tone={g.invoiced - g.charge < 0 ? "neg" : "pos"} strong />
+      <div class="row spread" style="margin-bottom:12px">
+        <strong>{g.name} — breakdown{g.members.length > 1 ? ` (${g.members.length} Xero projects combined)` : ""}</strong>
+        <a class="btn btn-sm" href={ledgerHref}>📒 Open ledger →</a>
       </div>
-      <p class="muted" style="font-size:12px;margin:0 0 14px">
-        Charge is the supplier bills and spend assigned to this project in Xero. Xero's API doesn't expose those line
-        items individually — open the project in Xero for document-level detail.
-      </p>
+
+      <div class="kpis" style="margin-bottom:14px">
+        <div class="kpi"><div class="k-label">Charge</div><div class="k-value" style="font-size:18px">{formatZAR(g.charge)}</div><div class="k-sub muted">bills &amp; spend assigned in Xero</div></div>
+        <div class="kpi"><div class="k-label">Invoiced</div><div class="k-value" style="font-size:18px">{formatZAR(g.invoiced)}</div></div>
+        <div class="kpi"><div class="k-label">Profit</div><div class={`k-value ${g.invoiced - g.charge < 0 ? "neg" : "pos"}`} style="font-size:18px">{formatZAR(g.invoiced - g.charge)}</div><div class="k-sub muted">{pct(g.invoiced - g.charge, g.invoiced)}% of invoiced</div></div>
+        <div class="kpi"><div class="k-label">{estimate > 0 ? "Estimate" : "Xero projects"}</div><div class="k-value" style="font-size:18px">{estimate > 0 ? formatZAR(estimate) : String(g.members.length)}</div></div>
+      </div>
 
       {g.members.length > 1 ? (
-        <div style="margin-bottom:14px">
+        <div style="margin-bottom:12px">
           <strong style="font-size:13px">Underlying Xero projects</strong>
           <table style="border-collapse:collapse;font-size:13px;width:100%;margin-top:6px">
             <thead>
@@ -278,7 +306,7 @@ const GroupDrill: FC<{
       ) : null}
 
       {tasks.length > 0 ? (
-        <div style="margin-bottom:14px">
+        <div style="margin-bottom:12px">
           <strong style="font-size:13px">Tasks (time items)</strong>
           <table style="border-collapse:collapse;font-size:13px;width:100%;margin-top:6px">
             <thead>
@@ -299,38 +327,13 @@ const GroupDrill: FC<{
               ))}
             </tbody>
           </table>
-          {tasks.length > 20 ? <p class="muted" style="font-size:12px;margin:6px 0 0">Top 20 of {tasks.length} tasks shown.</p> : null}
         </div>
       ) : null}
 
-      <div>
-        <strong style="font-size:13px">By month{g.members.length > 1 ? " — group combined" : ""}</strong>
-        {deltas.length <= 1 ? (
-          <p class="muted" style="font-size:12px;margin:6px 0 0">
-            Monthly movement builds from sync snapshots: each sync records the running totals, and the difference
-            between months becomes the monthly view. Check back after the next month's syncs.
-          </p>
-        ) : (
-          <table style="border-collapse:collapse;font-size:12px;width:100%;margin-top:6px">
-            <thead>
-              <tr>{["Month", "Charge added", "Invoiced added", "Cumulative charge", "Cumulative invoiced"].map((h) => (
-                <th style={`text-align:${h === "Month" ? "left" : "right"};padding:4px 12px 4px 0;color:var(--muted)`}>{h}</th>
-              ))}</tr>
-            </thead>
-            <tbody>
-              {deltas.map((d) => (
-                <tr>
-                  <td style="padding:3px 12px 3px 0">{label(d.month)}{d.charge == null ? <span class="cellhint"> opening</span> : null}</td>
-                  <td style="padding:3px 0;text-align:right;font-variant-numeric:tabular-nums">{d.charge == null ? "—" : formatZAR(d.charge)}</td>
-                  <td style="padding:3px 0 3px 12px;text-align:right;font-variant-numeric:tabular-nums">{d.invoiced == null ? "—" : formatZAR(d.invoiced)}</td>
-                  <td style="padding:3px 0 3px 12px;text-align:right;font-variant-numeric:tabular-nums" class="muted">{formatZAR(d.cumCharge)}</td>
-                  <td style="padding:3px 0 3px 12px;text-align:right;font-variant-numeric:tabular-nums" class="muted">{formatZAR(d.cumInvoiced)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <p class="muted" style="font-size:12px;margin:0">
+        Charge is the supplier bills and spend assigned to this project in Xero (the API doesn't expose those line items
+        individually). <a href={ledgerHref}>Open the ledger</a> for the month-by-month movement.
+      </p>
     </div>
   );
 };
