@@ -46,7 +46,7 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
-import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects } from "./data/projects";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots } from "./data/projects";
 import { ProjectsPage } from "./views/projects";
 import {
   listEmployees,
@@ -246,14 +246,69 @@ app.get("/app/admin/quality", async (c) => {
 
 // ---------- Projects ----------
 
+const PROJECT_PERIODS = ["month", "lastmonth", "quarter", "fy", "all"] as const;
+type ProjectPeriod = (typeof PROJECT_PERIODS)[number];
+
 app.get("/app/projects", async (c) => {
-  const [projects, lastSync, projErr] = await Promise.all([
+  const [projects, allSnaps, lastSync, projErr] = await Promise.all([
     listProjects(c.env.DB),
+    listAllSnapshots(c.env.DB),
     getMeta(c.env.DB, "xero_last_sync"),
     getMeta(c.env.DB, "xero_projects_error"),
   ]);
   const fRaw = String(c.req.query("f") ?? "inprogress");
   const filter = fRaw === "closed" || fRaw === "all" ? (fRaw as "closed" | "all") : "inprogress";
+
+  // ---- Period window (This month / Last month / FY quarter / FY / all time) ----
+  const pRaw = String(c.req.query("p") ?? "all");
+  const period: ProjectPeriod = (PROJECT_PERIODS as readonly string[]).includes(pRaw) ? (pRaw as ProjectPeriod) : "all";
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const fyStartOf = (m: string) => `${fiscalYearOf(m) - 1}-03`;
+  const qStartOf = (m: string) => {
+    const fyS = fyStartOf(m);
+    const off = (Number(m.slice(0, 4)) - Number(fyS.slice(0, 4))) * 12 + Number(m.slice(5, 7)) - Number(fyS.slice(5, 7));
+    return addMonths(fyS, Math.floor(off / 3) * 3);
+  };
+  const windows: Record<Exclude<ProjectPeriod, "all">, { start: string; end: string; label: string }> = {
+    month: { start: nowMonth, end: nowMonth, label: label(nowMonth) },
+    lastmonth: { start: addMonths(nowMonth, -1), end: addMonths(nowMonth, -1), label: label(addMonths(nowMonth, -1)) },
+    quarter: { start: qStartOf(nowMonth), end: nowMonth, label: `${label(qStartOf(nowMonth))} – ${label(nowMonth)}` },
+    fy: { start: fyStartOf(nowMonth), end: nowMonth, label: `${fyLabel(fiscalYearOf(nowMonth))} to date` },
+  };
+
+  // Period values from snapshot deltas: value = cumulative at window end −
+  // cumulative before window start. Live totals stand in for the current month.
+  let periodValues: Map<string, { charge: number; invoiced: number }> | null = null;
+  let periodLabel: string | null = null;
+  let baselineMissing = false;
+  if (period !== "all") {
+    const w = windows[period];
+    periodLabel = w.label;
+    const byProject = new Map<string, { month: string; charge: number; invoiced: number }[]>();
+    for (const snap of allSnaps) {
+      if (!byProject.has(snap.project_id)) byProject.set(snap.project_id, []);
+      byProject.get(snap.project_id)!.push(snap);
+    }
+    const anyOpening = allSnaps.some((snap) => snap.month < w.start);
+    if (!anyOpening && allSnaps.length > 0) baselineMissing = true;
+    if (allSnaps.length === 0) baselineMissing = true;
+    periodValues = new Map();
+    for (const proj of projects) {
+      const snaps = byProject.get(proj.id) ?? [];
+      const opening = [...snaps].reverse().find((snap) => snap.month < w.start);
+      const closing = w.end >= nowMonth
+        ? { charge: proj.task_amount + proj.expense_amount, invoiced: proj.invoiced }
+        : [...snaps].reverse().find((snap) => snap.month <= w.end) ?? null;
+      if (!closing) {
+        periodValues.set(proj.id, { charge: 0, invoiced: 0 });
+        continue;
+      }
+      periodValues.set(proj.id, {
+        charge: closing.charge - (opening?.charge ?? 0),
+        invoiced: closing.invoiced - (opening?.invoiced ?? 0),
+      });
+    }
+  }
   const openName = c.req.query("open")?.trim() || null;
   // Same-named projects are grouped — load detail across every member.
   const memberIds = openName ? projects.filter((p) => p.name.trim() === openName).map((p) => p.id) : [];
@@ -262,7 +317,8 @@ app.get("/app/projects", async (c) => {
     : [[], []];
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
-    <ProjectsPage projects={projects} filter={filter} openName={openName} tasks={tasks} snapshots={snapshots}
+    <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodLabel={periodLabel}
+      baselineMissing={baselineMissing} openName={openName} tasks={tasks} snapshots={snapshots}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
   );
 });

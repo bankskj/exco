@@ -81,3 +81,10 @@ export async function listSnapshotsForProjects(db: D1Database, ids: string[]): P
     .all<ProjectSnapshot>();
   return results ?? [];
 }
+
+export async function listAllSnapshots(db: D1Database): Promise<ProjectSnapshot[]> {
+  const { results } = await db
+    .prepare("SELECT project_id, month, charge, invoiced FROM xero_project_snapshots ORDER BY month")
+    .all<ProjectSnapshot>();
+  return results ?? [];
+}

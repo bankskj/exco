@@ -27,15 +27,30 @@ export type ProjectGroup = {
   minutes: number;
 };
 
+export type ProjectPeriodKey = "month" | "lastmonth" | "quarter" | "fy" | "all";
+
+const PERIOD_TABS: { key: ProjectPeriodKey; label: string }[] = [
+  { key: "month", label: "This month" },
+  { key: "lastmonth", label: "Last month" },
+  { key: "quarter", label: "This quarter" },
+  { key: "fy", label: "This FY" },
+  { key: "all", label: "All time" },
+];
+
 export const ProjectsPage: FC<{
   projects: XeroProject[];
   filter: "inprogress" | "closed" | "all";
+  period: ProjectPeriodKey;
+  periodValues: Map<string, { charge: number; invoiced: number }> | null; // null = all time (lifetime totals)
+  periodLabel: string | null;
+  baselineMissing: boolean;
   openName: string | null;
   tasks: XeroProjectTask[]; // tasks across the open group
   snapshots: ProjectSnapshot[]; // month-summed snapshots across the open group
   lastSyncLabel: string | null;
   scopeError?: string | null;
-}> = ({ projects, filter, openName, tasks, snapshots, lastSyncLabel, scopeError }) => {
+}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, tasks, snapshots, lastSyncLabel, scopeError }) => {
+  const valOf = (p: XeroProject) => periodValues?.get(p.id) ?? { charge: charge(p), invoiced: p.invoiced };
   const visible = projects.filter((p) =>
     filter === "all" ? true : filter === "closed" ? p.status !== "INPROGRESS" : p.status === "INPROGRESS",
   );
@@ -46,17 +61,21 @@ export const ProjectsPage: FC<{
     const g = groups.get(key)!;
     g.members.push(p);
     if (p.status === "INPROGRESS") g.inProgress++;
-    g.charge += charge(p);
-    g.invoiced += p.invoiced;
+    const v = valOf(p);
+    g.charge += v.charge;
+    g.invoiced += v.invoiced;
     g.minutes += p.minutes_logged;
   }
-  const rows = [...groups.values()].sort((a, b) => (a.inProgress > 0 === (b.inProgress > 0) ? a.name.localeCompare(b.name) : a.inProgress > 0 ? -1 : 1));
+  const rows = [...groups.values()]
+    .filter((g) => period === "all" || Math.abs(g.charge) > 0.005 || Math.abs(g.invoiced) > 0.005)
+    .sort((a, b) => (a.inProgress > 0 === (b.inProgress > 0) ? a.name.localeCompare(b.name) : a.inProgress > 0 ? -1 : 1));
   const tot = rows.reduce((a, g) => ({ charge: a.charge + g.charge, invoiced: a.invoiced + g.invoiced }), { charge: 0, invoiced: 0 });
   const open = openName ? rows.find((g) => g.name === openName) ?? null : null;
-  const qs = (over: { f?: string; open?: string | null }) => {
+  const qs = (over: { f?: string; p?: string; open?: string | null }) => {
     const f = over.f ?? filter;
+    const pd = over.p ?? period;
     const o = over.open === undefined ? openName : over.open;
-    return `/app/projects?f=${f}${o ? `&open=${encodeURIComponent(o)}` : ""}`;
+    return `/app/projects?f=${f}&p=${pd}${o ? `&open=${encodeURIComponent(o)}` : ""}`;
   };
 
   const deltas = snapshots.map((s, i) => ({
@@ -96,19 +115,36 @@ export const ProjectsPage: FC<{
         {projects.length > 0 ? (
           <>
             <div class="row spread section-block" style="align-items:center">
-              <div class="segmented">
-                <a href={qs({ f: "inprogress", open: null })} class={filter === "inprogress" ? "seg active" : "seg"}>In progress</a>
-                <a href={qs({ f: "closed", open: null })} class={filter === "closed" ? "seg active" : "seg"}>Closed</a>
-                <a href={qs({ f: "all", open: null })} class={filter === "all" ? "seg active" : "seg"}>All</a>
+              <div class="row" style="gap:10px">
+                <div class="segmented">
+                  <a href={qs({ f: "inprogress", open: null })} class={filter === "inprogress" ? "seg active" : "seg"}>In progress</a>
+                  <a href={qs({ f: "closed", open: null })} class={filter === "closed" ? "seg active" : "seg"}>Closed</a>
+                  <a href={qs({ f: "all", open: null })} class={filter === "all" ? "seg active" : "seg"}>All</a>
+                </div>
+                <div class="segmented">
+                  {PERIOD_TABS.map((t) => (
+                    <a href={qs({ p: t.key, open: null })} class={period === t.key ? "seg active" : "seg"}>{t.label}</a>
+                  ))}
+                </div>
               </div>
               <span class="muted" style="font-size:12px">
-                Figures are project-to-date (all time) <Info text="Xero's Project Financials report can be date-ranged; the Projects API returns lifetime totals, so a project spanning financial years shows its full history here." />
+                {period === "all"
+                  ? <>Figures are project-to-date (all time) <Info text="Xero's Projects API returns lifetime totals, so a project spanning financial years shows its full history here." /></>
+                  : <>Movement in {periodLabel} <Info text="Period figures are the change in each project's totals over the window, computed from sync snapshots. The current month uses live totals." /></>}
               </span>
             </div>
 
+            {period !== "all" && baselineMissing ? (
+              <div class="callout section-block" style="border-left-color:#f6c453">
+                Period views build from sync snapshots, and history only starts at the first recorded snapshot — until a
+                snapshot exists <em>before</em> this window, earlier project history can't be separated out and the figures
+                below may include it. This resolves by itself as monthly syncs accumulate.
+              </div>
+            ) : null}
+
             <div class="kpis section-block">
-              <Kpi label="Charge (cost of work)" value={formatZAR(tot.charge)} sub={`${rows.length} project group(s) · ${visible.length} Xero project(s)`} />
-              <Kpi label="Invoiced" value={formatZAR(tot.invoiced)} />
+              <Kpi label={period === "all" ? "Charge (cost of work)" : `Charge — ${periodLabel}`} value={formatZAR(tot.charge)} sub={`${rows.length} project group(s) with activity`} />
+              <Kpi label={period === "all" ? "Invoiced" : `Invoiced — ${periodLabel}`} value={formatZAR(tot.invoiced)} />
               <Kpi label="Profit" value={formatZAR(tot.invoiced - tot.charge)} tone={tot.invoiced - tot.charge < 0 ? "neg" : "pos"}
                 sub={`${pct(tot.invoiced - tot.charge, tot.invoiced)}% of invoiced`} />
               <Kpi label="In progress" value={String(projects.filter((p) => p.status === "INPROGRESS").length)} sub={`${projects.length} project(s) total`} />
