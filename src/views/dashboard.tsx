@@ -23,7 +23,7 @@ const Attention: FC<{ href: string; title: string; tone: string; children?: unkn
   </a>
 );
 
-export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null }> = ({ s, lastSyncLabel }) => {
+export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: string }> = ({ s, lastSyncLabel, msg }) => {
   const overdueShare = s.receivables.outstanding ? Math.round((s.receivables.overdue30 / s.receivables.outstanding) * 100) : 0;
   return (
     <Layout title="Overview" authed section="overview" wide>
@@ -34,10 +34,18 @@ export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null }> = ({ s
             <p class="muted" style="margin:0">How is the business doing? Click any card for the detail behind it.</p>
             <AsAt lastSync={lastSyncLabel} />
           </div>
-          <span class={`risk ${s.cash.risk}`} style="margin-top:20px" title={riskSub(s.cash.risk, s.cash.fundingMonth, s.cash.lowest)}>
-            Cash risk: {RISK_LABEL[s.cash.risk]}
-          </span>
+          <div class="row" style="margin-top:20px">
+            <form method="post" action="/app/expenses/sync" style="margin:0">
+              <input type="hidden" name="back" value="overview" />
+              <button class="btn btn-sm" type="submit">↻ Sync now</button>
+            </form>
+            <span class={`risk ${s.cash.risk}`} title={riskSub(s.cash.risk, s.cash.fundingMonth, s.cash.lowest)}>
+              Cash risk: {RISK_LABEL[s.cash.risk]}
+            </span>
+          </div>
         </div>
+
+        {msg ? <div class="callout" style="margin-top:16px">{msg}</div> : null}
 
         <div class="grid section-block" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
           <Big href="/app/finance/cash" label="Cash available" badge="estimate"

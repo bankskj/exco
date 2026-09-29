@@ -68,13 +68,7 @@ export const CashLiquidityPage: FC<{
             </p>
             <AsAt lastSync={lastSync} />
           </div>
-          <div class="row">
-            <form method="post" action="/app/expenses/sync" style="margin:0">
-              <input type="hidden" name="back" value="cash" />
-              <button class="btn btn-sm" type="submit">↻ Sync now</button>
-            </form>
-            <a class="btn btn-sm" href="/app/accounts/export.csv">⬇ Export CSV</a>
-          </div>
+          <a class="btn btn-sm" href="/app/accounts/export.csv" style="margin-top:16px">⬇ Export CSV</a>
         </div>
 
         {msg ? <div class="callout" style="margin-bottom:16px">{msg}</div> : null}

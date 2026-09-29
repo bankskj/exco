@@ -125,7 +125,8 @@ app.use("/app/*", requireAuth);
 
 app.get("/app", async (c) => {
   const { derived, snapshot } = await loadSnapshot(c.env);
-  return c.html(<Dashboard s={snapshot} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
+  const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+  return c.html(<Dashboard s={snapshot} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={msg} />);
 });
 
 // ---------- Finance overview ----------
