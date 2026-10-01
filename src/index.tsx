@@ -247,7 +247,7 @@ app.get("/app/admin/quality", async (c) => {
 
 // ---------- Projects ----------
 
-const PROJECT_PERIODS = ["month", "lastmonth", "quarter", "fy", "all"] as const;
+const PROJECT_PERIODS = ["month", "lastmonth", "quarter", "lastquarter", "fy", "all"] as const;
 type ProjectPeriod = (typeof PROJECT_PERIODS)[number];
 
 app.get("/app/projects", async (c) => {
@@ -275,6 +275,11 @@ app.get("/app/projects", async (c) => {
     month: { start: nowMonth, end: nowMonth, label: label(nowMonth) },
     lastmonth: { start: addMonths(nowMonth, -1), end: addMonths(nowMonth, -1), label: label(addMonths(nowMonth, -1)) },
     quarter: { start: qStartOf(nowMonth), end: nowMonth, label: `${label(qStartOf(nowMonth))} – ${label(nowMonth)}` },
+    lastquarter: {
+      start: addMonths(qStartOf(nowMonth), -3),
+      end: addMonths(qStartOf(nowMonth), -1),
+      label: `${label(addMonths(qStartOf(nowMonth), -3))} – ${label(addMonths(qStartOf(nowMonth), -1))}`,
+    },
     fy: { start: fyStartOf(nowMonth), end: nowMonth, label: `${fyLabel(fiscalYearOf(nowMonth))} to date` },
   };
 

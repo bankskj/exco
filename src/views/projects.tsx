@@ -27,12 +27,13 @@ export type ProjectGroup = {
   minutes: number;
 };
 
-export type ProjectPeriodKey = "month" | "lastmonth" | "quarter" | "fy" | "all";
+export type ProjectPeriodKey = "month" | "lastmonth" | "quarter" | "lastquarter" | "fy" | "all";
 
 const PERIOD_TABS: { key: ProjectPeriodKey; label: string }[] = [
   { key: "month", label: "This month" },
   { key: "lastmonth", label: "Last month" },
   { key: "quarter", label: "This quarter" },
+  { key: "lastquarter", label: "Last quarter" },
   { key: "fy", label: "This FY" },
   { key: "all", label: "All time" },
 ];
