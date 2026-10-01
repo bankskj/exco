@@ -41,7 +41,9 @@ export const ProjectsPage: FC<{
   projects: XeroProject[];
   filter: "inprogress" | "closed" | "all";
   period: ProjectPeriodKey;
-  periodValues: Map<string, { charge: number; invoiced: number }> | null; // null = all time (lifetime totals)
+  periodValues: Map<string, { charge: number; invoiced: number }> | null; // snapshot deltas, keyed by project id
+  periodByName: Map<string, { charge: number; invoiced: number }> | null; // exact figures from dated monthly imports, keyed by name
+  missingImports: string[]; // window months without a dated import (forces snapshot fallback)
   periodLabel: string | null;
   baselineMissing: boolean;
   openName: string | null;
@@ -53,7 +55,7 @@ export const ProjectsPage: FC<{
   msg?: string;
   lastSyncLabel: string | null;
   scopeError?: string | null;
-}> = ({ projects, filter, period, periodValues, periodLabel, baselineMissing, openName, ledger, tasks, snapshots, items, itemsMeta, msg, lastSyncLabel, scopeError }) => {
+}> = ({ projects, filter, period, periodValues, periodByName, missingImports, periodLabel, baselineMissing, openName, ledger, tasks, snapshots, items, itemsMeta, msg, lastSyncLabel, scopeError }) => {
   const valOf = (p: XeroProject) => periodValues?.get(p.id) ?? { charge: charge(p), invoiced: p.invoiced };
   const visible = projects.filter((p) =>
     filter === "all" ? true : filter === "closed" ? p.status !== "INPROGRESS" : p.status === "INPROGRESS",
@@ -69,6 +71,13 @@ export const ProjectsPage: FC<{
     g.charge += v.charge;
     g.invoiced += v.invoiced;
     g.minutes += p.minutes_logged;
+  }
+  if (periodByName) {
+    for (const g of groups.values()) {
+      const v = periodByName.get(g.name) ?? { charge: 0, invoiced: 0 };
+      g.charge = v.charge;
+      g.invoiced = v.invoiced;
+    }
   }
   const rows = [...groups.values()]
     .filter((g) => period === "all" || Math.abs(g.charge) > 0.005 || Math.abs(g.invoiced) > 0.005)
@@ -141,15 +150,20 @@ export const ProjectsPage: FC<{
               <span class="muted" style="font-size:12px">
                 {period === "all"
                   ? <>Figures are project-to-date (all time) <Info text="Xero's Projects API returns lifetime totals, so a project spanning financial years shows its full history here." /></>
+                  : periodByName
+                  ? <>Movement in {periodLabel} — from dated imports <Info text="Exact figures from your imported single-month Project Financials exports (the current month, where applicable, uses live movement since the last sync snapshot)." /></>
                   : <>Movement in {periodLabel} <Info text="Period figures are the change in each project's totals over the window, computed from sync snapshots. The current month uses live totals." /></>}
               </span>
             </div>
 
-            {period !== "all" && baselineMissing ? (
+            {period !== "all" && !periodByName && baselineMissing ? (
               <div class="callout section-block" style="border-left-color:#f6c453">
-                Period views build from sync snapshots, and history only starts at the first recorded snapshot — until a
-                snapshot exists <em>before</em> this window, earlier project history can't be separated out and the figures
-                below may include it. This resolves by itself as monthly syncs accumulate.
+                {missingImports.length > 0
+                  ? <>This window needs dated imports for: <strong>{missingImports.map(label).join(", ")}</strong> — export Project
+                    Financials for each of those months and import them, and this view becomes exact. Until then it falls
+                    back to sync snapshots, whose history only starts at the first recorded snapshot.</>
+                  : <>Period views build from sync snapshots, and history only starts at the first recorded snapshot —
+                    earlier project history can't be separated out yet. This resolves as monthly syncs accumulate.</>}
               </div>
             ) : null}
 

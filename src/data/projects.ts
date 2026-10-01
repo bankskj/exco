@@ -145,3 +145,16 @@ export async function listProjectItems(db: D1Database, projectName: string): Pro
     .all<ProjectItemRow>();
   return results ?? [];
 }
+
+export type MonthlyItemTotal = { project_name: string; month: string; charge: number; invoiced: number };
+
+/** Per-project monthly totals from dated (single-month) Project Financials imports. */
+export async function listMonthlyItemTotals(db: D1Database): Promise<MonthlyItemTotal[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT project_name, period_month AS month, SUM(CASE WHEN charge != 0 THEN charge ELSE cost END) AS charge, SUM(invoiced) AS invoiced " +
+        "FROM xero_project_items WHERE period_month != '' GROUP BY project_name, period_month",
+    )
+    .all<MonthlyItemTotal>();
+  return results ?? [];
+}

@@ -46,7 +46,7 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
-import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, type ImportMeta } from "./data/projects";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, listMonthlyItemTotals, type ImportMeta } from "./data/projects";
 import { parseProjectFinancials, parsePeriod } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
 import {
@@ -251,9 +251,10 @@ const PROJECT_PERIODS = ["month", "lastmonth", "quarter", "fy", "all"] as const;
 type ProjectPeriod = (typeof PROJECT_PERIODS)[number];
 
 app.get("/app/projects", async (c) => {
-  const [projects, allSnaps, lastSync, projErr] = await Promise.all([
+  const [projects, allSnaps, monthlyItems, lastSync, projErr] = await Promise.all([
     listProjects(c.env.DB),
     listAllSnapshots(c.env.DB),
+    listMonthlyItemTotals(c.env.DB),
     getMeta(c.env.DB, "xero_last_sync"),
     getMeta(c.env.DB, "xero_projects_error"),
   ]);
@@ -280,16 +281,54 @@ app.get("/app/projects", async (c) => {
   // Period values from snapshot deltas: value = cumulative at window end −
   // cumulative before window start. Live totals stand in for the current month.
   let periodValues: Map<string, { charge: number; invoiced: number }> | null = null;
+  let periodByName: Map<string, { charge: number; invoiced: number }> | null = null;
   let periodLabel: string | null = null;
   let baselineMissing = false;
+  let missingImports: string[] = [];
   if (period !== "all") {
     const w = windows[period];
     periodLabel = w.label;
+    // Preferred source: dated monthly imports of the Project Financials report —
+    // exact figures from Xero's own date-ranged report. The current month (no
+    // import possible yet) is covered by the live-vs-snapshot delta.
+    const importedMonths = new Set(monthlyItems.map((r) => r.month));
+    const windowMonths: string[] = [];
+    for (let m = w.start; m <= w.end; m = addMonths(m, 1)) windowMonths.push(m);
+    missingImports = windowMonths.filter((m) => m !== nowMonth && !importedMonths.has(m));
+    if (missingImports.length === 0 && windowMonths.some((m) => importedMonths.has(m) || m === nowMonth)) {
+      periodByName = new Map();
+      for (const r of monthlyItems) {
+        if (!windowMonths.includes(r.month)) continue;
+        const cur = periodByName.get(r.project_name.trim()) ?? { charge: 0, invoiced: 0 };
+        cur.charge += r.charge;
+        cur.invoiced += r.invoiced;
+        periodByName.set(r.project_name.trim(), cur);
+      }
+      if (windowMonths.includes(nowMonth)) {
+        // Live movement since the last snapshot before the current month.
+        const byProject = new Map<string, { month: string; charge: number; invoiced: number }[]>();
+        for (const snap of allSnaps) {
+          if (!byProject.has(snap.project_id)) byProject.set(snap.project_id, []);
+          byProject.get(snap.project_id)!.push(snap);
+        }
+        for (const proj of projects) {
+          const snaps = byProject.get(proj.id) ?? [];
+          const opening = [...snaps].reverse().find((snap) => snap.month < nowMonth);
+          if (!opening) continue;
+          const name = proj.name.trim();
+          const cur = periodByName.get(name) ?? { charge: 0, invoiced: 0 };
+          cur.charge += proj.task_amount + proj.expense_amount - opening.charge;
+          cur.invoiced += proj.invoiced - opening.invoiced;
+          periodByName.set(name, cur);
+        }
+      }
+    }
     const byProject = new Map<string, { month: string; charge: number; invoiced: number }[]>();
     for (const snap of allSnaps) {
       if (!byProject.has(snap.project_id)) byProject.set(snap.project_id, []);
       byProject.get(snap.project_id)!.push(snap);
     }
+    if (periodByName == null) {
     const anyOpening = allSnaps.some((snap) => snap.month < w.start);
     if (!anyOpening && allSnaps.length > 0) baselineMissing = true;
     if (allSnaps.length === 0) baselineMissing = true;
@@ -309,6 +348,7 @@ app.get("/app/projects", async (c) => {
         invoiced: closing.invoiced - (opening?.invoiced ?? 0),
       });
     }
+    }
   }
   const openName = c.req.query("open")?.trim() || null;
   const ledgerFlag = c.req.query("ledger") === "1";
@@ -325,7 +365,8 @@ app.get("/app/projects", async (c) => {
   } catch { itemsMeta = []; }
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
-    <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodLabel={periodLabel}
+    <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodByName={periodByName}
+      missingImports={missingImports} periodLabel={periodLabel}
       baselineMissing={baselineMissing} openName={openName} ledger={ledgerFlag} tasks={tasks} snapshots={snapshots}
       items={items} itemsMeta={itemsMeta} msg={c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} scopeError={scopeError} />,
