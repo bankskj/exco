@@ -300,9 +300,12 @@ export const ProjectsPage: FC<{
               </>
             ) : (
               <div class="callout" style="margin:2px 0 16px">
-                No allocation lines yet. Xero's API doesn't expose them — export <strong>Reports → Project
-                Financials</strong> as Excel and use <strong>Import Project Financials</strong> at the top of this page.
-                Export <strong>one month at a time</strong> for a dated, per-month ledger — monthly imports accumulate.
+                {period !== "all"
+                  ? <>No imported allocation lines inside <strong>{periodLabel}</strong> for this project — import that
+                    month's Project Financials export, or switch the period to All time.</>
+                  : <>No allocation lines yet. Xero's API doesn't expose them — export <strong>Reports → Project
+                    Financials</strong> as Excel and use <strong>Import Project Financials</strong> at the top of this page.
+                    Export <strong>one month at a time</strong> for a dated, per-month ledger — monthly imports accumulate.</>}
               </div>
             )}
 

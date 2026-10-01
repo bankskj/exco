@@ -361,9 +361,14 @@ app.get("/app/projects", async (c) => {
   const ledgerFlag = c.req.query("ledger") === "1";
   // Same-named projects are grouped — load detail across every member.
   const memberIds = openName ? projects.filter((p) => p.name.trim() === openName).map((p) => p.id) : [];
-  const [tasks, snapshots, items] = openName
+  const [tasks, snapshots, itemsAll] = openName
     ? await Promise.all([listTasksForProjects(c.env.DB, memberIds), listSnapshotsForProjects(c.env.DB, memberIds), listProjectItems(c.env.DB, openName)])
     : [[], [], []];
+  // The ledger follows the selected period: only dated sections inside the window.
+  const items =
+    period === "all"
+      ? itemsAll
+      : itemsAll.filter((it) => it.period_month !== "" && it.period_month >= windows[period].start && it.period_month <= windows[period].end);
   const itemsMetaRaw = await getMeta(c.env.DB, "project_items_meta");
   let itemsMeta: ImportMeta[] = [];
   try {

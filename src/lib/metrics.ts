@@ -122,15 +122,23 @@ export function buildSnapshot(i: SnapshotInputs): Snapshot {
   }
   const netProfit = revenue - expenses;
 
-  // ---- Cash & risk (from the one forecast engine)
+  // ---- Cash & risk (from the one forecast engine), confined to the current FY
+  // so the executive headline doesn't roam into next year's horizon.
   const colNow = i.cf.columns.find((c) => c.month === nowMonth);
   const bankEstimate = colNow?.balance ?? i.cf.kpis.currentCash;
+  const fyCap = `${fiscalYearOf(nowMonth)}-02`;
+  const fyCols = i.cf.columns.filter((c) => c.month <= fyCap);
+  const lowestFy = fyCols.reduce(
+    (low, c) => (c.balance < low.balance ? { month: c.month, balance: c.balance } : low),
+    { month: nowMonth, balance: bankEstimate },
+  );
   const forecastCols = i.cf.columns.filter((c) => c.isForecast);
-  const fundingMonth = bankEstimate < 0 ? nowMonth : forecastCols.find((c) => c.balance < 0)?.month ?? null;
+  const fundingMonth =
+    bankEstimate < 0 ? nowMonth : forecastCols.find((c) => c.month <= fyCap && c.balance < 0)?.month ?? null;
   const risk: CashRisk =
     bankEstimate < 0 ? "overdrawn"
     : fundingMonth != null ? "funding"
-    : i.cf.kpis.lowest.balance < 0 ? "watch"
+    : lowestFy.balance < 0 ? "watch"
     : "healthy";
   const nextForecast = forecastCols[0];
 
@@ -204,7 +212,7 @@ export function buildSnapshot(i: SnapshotInputs): Snapshot {
     cash: {
       bankEstimate,
       asAtMonth: nowMonth,
-      lowest: i.cf.kpis.lowest,
+      lowest: lowestFy,
       fundingMonth,
       risk,
       next30Net: nextForecast?.net ?? 0,

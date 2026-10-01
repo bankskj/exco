@@ -71,8 +71,8 @@ export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: st
 
           <Big href="/app/finance/forecast" label="Forecast cash low point" badge="forecast"
             value={formatZAR(s.cash.lowest.balance)} tone={s.cash.lowest.balance < 0 ? "neg" : "pos"}
-            info="The lowest projected bank balance in the forecast window, from the Forecast model.">
-            <div class="muted">lowest projected balance · {label(s.cash.lowest.month)}</div>
+            info={`The lowest projected bank balance within ${fyLabel(s.profit.fy)} (to end Feb), from the Forecast model. The Forecast page shows the full horizon.`}>
+            <div class="muted">lowest projected balance in {fyLabel(s.profit.fy)} · {label(s.cash.lowest.month)}</div>
             {s.cash.fundingMonth ? <div class="warn">⚠ Funding pressure {s.cash.risk === "overdrawn" ? "now" : `begins ${label(s.cash.fundingMonth)}`}</div> : <div class="pos">cash stays above zero</div>}
           </Big>
         </div>
