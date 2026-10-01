@@ -34,7 +34,7 @@ import { CashLiquidityPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
 import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, setIncludeForecast, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, fetchProjects, fetchProjectTasks, type PnL, type PnLRow, type XeroProjectTask } from "./lib/xero";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, fetchProjects, fetchProjectTasks, fetchVatOwing, type PnL, type PnLRow, type XeroProjectTask } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -127,7 +127,12 @@ app.use("/app/*", requireAuth);
 app.get("/app", async (c) => {
   const { derived, snapshot } = await loadSnapshot(c.env);
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
-  return c.html(<Dashboard s={snapshot} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={msg} />);
+  const vatRaw = await getMeta(c.env.DB, "vat_owing");
+  const vatErr = (await getMeta(c.env.DB, "vat_error")) || null;
+  const vat = vatRaw != null && vatRaw !== "" && !vatErr
+    ? { amount: Number(vatRaw) || 0, accounts: (await getMeta(c.env.DB, "vat_owing_accounts")) || "VAT control", asAt: (await getMeta(c.env.DB, "vat_owing_asat")) || null }
+    : null;
+  return c.html(<Dashboard s={snapshot} vat={vat} vatError={vatErr} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={msg} />);
 });
 
 // ---------- Finance overview ----------
@@ -1465,6 +1470,16 @@ async function runXeroSync(env: Bindings): Promise<string> {
     await setMeta(env.DB, "xero_projects_error", "");
   } catch (e) {
     await setMeta(env.DB, "xero_projects_error", e instanceof Error ? e.message : "unknown");
+  }
+  // VAT owed to SARS — the VAT control balance from the Balance Sheet.
+  try {
+    const vat = await fetchVatOwing(token, tenantId);
+    await setMeta(env.DB, "vat_owing", String(vat.amount));
+    await setMeta(env.DB, "vat_owing_asat", new Date().toISOString());
+    await setMeta(env.DB, "vat_owing_accounts", vat.accounts.join(" + "));
+    await setMeta(env.DB, "vat_error", "");
+  } catch (e) {
+    await setMeta(env.DB, "vat_error", e instanceof Error ? e.message : "unknown");
   }
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
   const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.`;

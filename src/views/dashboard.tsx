@@ -23,7 +23,13 @@ const Attention: FC<{ href: string; title: string; tone: string; children?: unkn
   </a>
 );
 
-export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: string }> = ({ s, lastSyncLabel, msg }) => {
+export const Dashboard: FC<{
+  s: Snapshot;
+  vat: { amount: number; accounts: string; asAt: string | null } | null;
+  vatError: string | null;
+  lastSyncLabel: string | null;
+  msg?: string;
+}> = ({ s, vat, vatError, lastSyncLabel, msg }) => {
   const overdueShare = s.receivables.outstanding ? Math.round((s.receivables.overdue30 / s.receivables.outstanding) * 100) : 0;
   return (
     <Layout title="Overview" authed section="overview" wide>
@@ -74,6 +80,24 @@ export const Dashboard: FC<{ s: Snapshot; lastSyncLabel: string | null; msg?: st
             info={`The lowest projected bank balance within ${fyLabel(s.profit.fy)} (to end Feb), from the Forecast model. The Forecast page shows the full horizon.`}>
             <div class="muted">lowest projected balance in {fyLabel(s.profit.fy)} · {label(s.cash.lowest.month)}</div>
             {s.cash.fundingMonth ? <div class="warn">⚠ Funding pressure {s.cash.risk === "overdrawn" ? "now" : `begins ${label(s.cash.fundingMonth)}`}</div> : <div class="pos">cash stays above zero</div>}
+          </Big>
+
+          <Big href="/app/finance/transactions" label="VAT owed to SARS" badge="actual"
+            value={vat ? formatZAR(vat.amount) : "—"}
+            tone={vat ? (vat.amount > 0 ? "warn" : "pos") : ""}
+            info="The VAT control account balance from Xero's Balance Sheet: VAT collected on sales less VAT paid on purchases, including any filed-but-unpaid returns. Positive = payable to SARS; negative = refund due.">
+            {vat ? (
+              <>
+                <div class="muted">{vat.amount > 0 ? "owing and unpaid, per the books" : "refund due / nothing owing"}</div>
+                <div class="muted">{vat.accounts}{vat.asAt ? ` · as at ${vat.asAt.slice(8, 10)}/${vat.asAt.slice(5, 7)}/${vat.asAt.slice(0, 4)}` : ""}</div>
+              </>
+            ) : (
+              <div class="muted">
+                {vatError
+                  ? "needs Balance Sheet access — disconnect & reconnect Xero under Admin, then sync"
+                  : "run a Xero sync to pull the VAT balance"}
+              </div>
+            )}
           </Big>
         </div>
 

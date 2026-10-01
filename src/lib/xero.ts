@@ -12,7 +12,7 @@ const REPEATING_URL = "https://api.xero.com/api.xro/2.0/RepeatingInvoices";
 // Repeating bills are invoice-family objects → accounting.invoices.read;
 // contacts.read for embedded vendor names; settings.read for org info;
 // offline_access for refresh tokens.
-export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.reports.profitandloss.read accounting.contacts.read accounting.settings.read projects.read";
+export const XERO_SCOPES = "offline_access accounting.invoices.read accounting.banktransactions.read accounting.reports.profitandloss.read accounting.reports.balancesheet.read accounting.contacts.read accounting.settings.read projects.read";
 
 export type XeroTokens = {
   access_token: string;
@@ -634,4 +634,35 @@ export async function fetchProjectTasks(accessToken: string, tenantId: string, p
     if (items.length < 50 || page >= Number(data.pagination?.pageCount ?? 1)) break;
   }
   return out;
+}
+
+/**
+ * VAT owed to SARS right now: the VAT control account balance(s) from the
+ * Balance Sheet as at today. Positive = owing; negative = refund due.
+ */
+export async function fetchVatOwing(accessToken: string, tenantId: string): Promise<{ amount: number; accounts: string[] }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await fetch(`https://api.xero.com/api.xro/2.0/Reports/BalanceSheet?date=${today}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Xero BalanceSheet ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as any;
+  let amount = 0;
+  const accounts: string[] = [];
+  const walk = (rows: any[]) => {
+    for (const r of rows ?? []) {
+      if (r.Rows) walk(r.Rows);
+      const cells = r.Cells ?? [];
+      const name = String(cells[0]?.Value ?? "");
+      if (/\bVAT\b|value[- ]added tax/i.test(name) && !/provision/i.test(name)) {
+        const v = Number(cells[1]?.Value ?? 0);
+        if (Number.isFinite(v) && v !== 0) {
+          amount += v;
+          accounts.push(name.trim());
+        }
+      }
+    }
+  };
+  walk(data.Reports?.[0]?.Rows ?? []);
+  return { amount, accounts };
 }
