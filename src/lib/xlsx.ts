@@ -102,6 +102,20 @@ export type ProjectItem = {
 };
 
 /** Parse Xero's "Project Financials" export into allocation line items. */
+const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+
+/** "1 March 2026 to 28 February 2027" → { label, month } (month set when single-month). */
+export function parsePeriod(raw: string): { label: string; month: string | null } {
+  const label = raw.trim();
+  const ms = [...label.matchAll(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/g)].map((m) => {
+    const mi = MONTHS.indexOf(m[2].toLowerCase());
+    return mi >= 0 ? `${m[3]}-${String(mi + 1).padStart(2, "0")}` : null;
+  });
+  const start = ms[0] ?? null;
+  const end = ms[1] ?? ms[0] ?? null;
+  return { label, month: start && end && start === end ? start : null };
+}
+
 export async function parseProjectFinancials(buf: ArrayBuffer): Promise<{ period: string; items: ProjectItem[] }> {
   const rows = await readSheetRows(buf);
   let period = "";

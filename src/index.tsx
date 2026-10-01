@@ -46,8 +46,8 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
-import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, replaceProjectItems, listProjectItems } from "./data/projects";
-import { parseProjectFinancials } from "./lib/xlsx";
+import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, type ImportMeta } from "./data/projects";
+import { parseProjectFinancials, parsePeriod } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
 import {
   listEmployees,
@@ -318,8 +318,11 @@ app.get("/app/projects", async (c) => {
     ? await Promise.all([listTasksForProjects(c.env.DB, memberIds), listSnapshotsForProjects(c.env.DB, memberIds), listProjectItems(c.env.DB, openName)])
     : [[], [], []];
   const itemsMetaRaw = await getMeta(c.env.DB, "project_items_meta");
-  let itemsMeta: { period: string; at: string; count: number } | null = null;
-  try { itemsMeta = itemsMetaRaw ? JSON.parse(itemsMetaRaw) : null; } catch { itemsMeta = null; }
+  let itemsMeta: ImportMeta[] = [];
+  try {
+    const parsed = itemsMetaRaw ? JSON.parse(itemsMetaRaw) : [];
+    itemsMeta = Array.isArray(parsed) ? parsed : parsed && parsed.period != null ? [{ period: parsed.period, month: null, at: parsed.at, count: parsed.count }] : [];
+  } catch { itemsMeta = []; }
   const scopeError = projErr && /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(projErr) ? projErr : projErr || null;
   return c.html(
     <ProjectsPage projects={projects} filter={filter} period={period} periodValues={periodValues} periodLabel={periodLabel}
@@ -337,8 +340,10 @@ app.post("/app/projects/import", async (c) => {
     if (f.size > 8 * 1024 * 1024) throw new Error("file too large");
     const { period, items } = await parseProjectFinancials(await f.arrayBuffer());
     if (items.length === 0) throw new Error("no allocation lines found — export 'Project Financials' from Xero as Excel");
-    await replaceProjectItems(c.env.DB, items, period);
-    return c.redirect(`/app/projects?msg=${encodeURIComponent(`Imported ${items.length} allocation line(s)${period ? ` for the period ${period}` : ""}.`)}`);
+    const { label: pLabel, month: pMonth } = parsePeriod(period || "unspecified period");
+    await importProjectItems(c.env.DB, items, pLabel, pMonth);
+    const tip = pMonth ? "" : " Tip: export the report one month at a time to build a dated, per-month ledger — monthly imports accumulate side by side.";
+    return c.redirect(`/app/projects?msg=${encodeURIComponent(`Imported ${items.length} allocation line(s) for ${pLabel}.${tip}`)}`);
   } catch (e) {
     return c.redirect(`/app/projects?msg=${encodeURIComponent(`Import failed: ${e instanceof Error ? e.message : "unknown error"}`)}`);
   }

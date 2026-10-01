@@ -97,24 +97,50 @@ export type ProjectItemRow = {
   cost: number;
   charge: number;
   invoiced: number;
+  period_label: string;
+  period_month: string; // YYYY-MM when the import covered a single month
 };
 
-export async function replaceProjectItems(db: D1Database, items: ProjectItemRow[], period: string): Promise<void> {
-  await db.prepare("DELETE FROM xero_project_items").run();
+export type ImportMeta = { period: string; month: string | null; at: string; count: number };
+
+/** Replace only the rows of the SAME period — different periods accumulate. */
+export async function importProjectItems(
+  db: D1Database,
+  items: Omit<ProjectItemRow, "period_label" | "period_month">[],
+  periodLabel: string,
+  periodMonth: string | null,
+): Promise<void> {
+  await db.prepare("DELETE FROM xero_project_items WHERE period_label = ?").bind(periodLabel).run();
   const stmt = db.prepare(
-    "INSERT INTO xero_project_items (project_name, contact, item_type, item_name, cost, charge, invoiced) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO xero_project_items (project_name, contact, item_type, item_name, cost, charge, invoiced, period_label, period_month) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (let i = 0; i < items.length; i += 40) {
-    const chunk = items.slice(i, i + 40).map((t) => stmt.bind(t.project_name, t.contact, t.item_type, t.item_name, t.cost, t.charge, t.invoiced));
+    const chunk = items.slice(i, i + 40).map((t) =>
+      stmt.bind(t.project_name, t.contact, t.item_type, t.item_name, t.cost, t.charge, t.invoiced, periodLabel, periodMonth ?? ""),
+    );
     if (chunk.length) await db.batch(chunk);
   }
-  const meta = JSON.stringify({ period, at: new Date().toISOString(), count: items.length });
-  await db.prepare("INSERT INTO app_meta (key, value) VALUES ('project_items_meta', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(meta).run();
+  const raw = await db.prepare("SELECT value FROM app_meta WHERE key='project_items_meta'").first<{ value: string }>();
+  let metas: ImportMeta[] = [];
+  try {
+    const parsed = raw ? JSON.parse(raw.value) : [];
+    metas = Array.isArray(parsed) ? parsed : parsed && parsed.period != null ? [{ period: parsed.period, month: null, at: parsed.at, count: parsed.count }] : [];
+  } catch {
+    metas = [];
+  }
+  metas = metas.filter((m) => m.period !== periodLabel);
+  metas.push({ period: periodLabel, month: periodMonth, at: new Date().toISOString(), count: items.length });
+  await db
+    .prepare("INSERT INTO app_meta (key, value) VALUES ('project_items_meta', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .bind(JSON.stringify(metas))
+    .run();
 }
 
 export async function listProjectItems(db: D1Database, projectName: string): Promise<ProjectItemRow[]> {
   const { results } = await db
-    .prepare("SELECT project_name, contact, item_type, item_name, cost, charge, invoiced FROM xero_project_items WHERE project_name = ? ORDER BY charge DESC, invoiced DESC")
+    .prepare(
+      "SELECT project_name, contact, item_type, item_name, cost, charge, invoiced, period_label, period_month FROM xero_project_items WHERE project_name = ? ORDER BY period_month DESC, period_label, charge DESC, invoiced DESC",
+    )
     .bind(projectName)
     .all<ProjectItemRow>();
   return results ?? [];

@@ -1,7 +1,7 @@
 import type { FC } from "hono/jsx";
 import { Layout, AsAt, Info, StateBadge } from "./layout";
 import type { XeroProject, XeroProjectTask } from "../lib/xero";
-import type { ProjectSnapshot, ProjectItemRow } from "../data/projects";
+import type { ProjectSnapshot, ProjectItemRow, ImportMeta } from "../data/projects";
 import { formatZAR } from "../lib/money";
 import { label, formatDMY } from "../lib/period";
 
@@ -48,8 +48,8 @@ export const ProjectsPage: FC<{
   ledger: boolean; // right-drawer ledger view for the open project
   tasks: XeroProjectTask[]; // tasks across the open group
   snapshots: ProjectSnapshot[]; // month-summed snapshots across the open group
-  items: ProjectItemRow[]; // allocation lines from the Project Financials import
-  itemsMeta: { period: string; at: string; count: number } | null;
+  items: ProjectItemRow[]; // allocation lines from the Project Financials import(s)
+  itemsMeta: ImportMeta[];
   msg?: string;
   lastSyncLabel: string | null;
   scopeError?: string | null;
@@ -235,36 +235,53 @@ export const ProjectsPage: FC<{
             {items.length > 0 ? (
               <>
                 <p class="muted" style="font-size:12px;margin:2px 0 10px">
-                  Every allocation on this project{itemsMeta ? ` — from the Project Financials import (${itemsMeta.period || "period not stated"}, imported ${formatDMY(itemsMeta.at.slice(0, 10))})` : ""}.
+                  Every allocation on this project, grouped by import period. Xero's export carries no line dates —
+                  import the report one month at a time and each month becomes its own dated section below.
                 </p>
-                <table style="margin-bottom:18px">
-                  <thead>
-                    <tr><th>Item</th><th style="text-align:right">Cost</th><th style="text-align:right">Invoiced</th></tr>
-                  </thead>
-                  <tbody>
-                    {items.map((it) => (
-                      <tr>
-                        <td>
-                          {it.item_name || "—"}
-                          <div class="cellhint">{it.contact}{it.item_type ? ` · ${it.item_type.toLowerCase()}` : ""}</div>
-                        </td>
-                        <td class="num">{it.charge || it.cost ? formatZAR(it.charge || it.cost) : "—"}</td>
-                        <td class="num">{it.invoiced ? formatZAR(it.invoiced) : "—"}</td>
-                      </tr>
-                    ))}
-                    <tr>
-                      <td style="font-weight:700">Total ({items.length} lines)</td>
-                      <td class="num" style="font-weight:700">{formatZAR(items.reduce((s2, it) => s2 + (it.charge || it.cost), 0))}</td>
-                      <td class="num" style="font-weight:700">{formatZAR(items.reduce((s2, it) => s2 + it.invoiced, 0))}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                {(() => {
+                  const periods = [...new Set(items.map((it) => it.period_label))];
+                  return periods.map((pl) => {
+                    const sect = items.filter((it) => it.period_label === pl);
+                    const pm = sect[0]?.period_month;
+                    const meta = itemsMeta.find((m2) => m2.period === pl);
+                    return (
+                      <div style="margin-bottom:18px">
+                        <div class="row spread" style="margin-bottom:4px">
+                          <strong style="font-size:13px">{pm ? label(pm) : pl || "Unspecified period"}</strong>
+                          <span class="muted" style="font-size:11px">{pm ? pl : ""}{meta ? ` · imported ${formatDMY(meta.at.slice(0, 10))}` : ""}</span>
+                        </div>
+                        <table>
+                          <thead>
+                            <tr><th>Item</th><th style="text-align:right">Cost</th><th style="text-align:right">Invoiced</th></tr>
+                          </thead>
+                          <tbody>
+                            {sect.map((it) => (
+                              <tr>
+                                <td>
+                                  {it.item_name || "—"}
+                                  <div class="cellhint">{it.contact}{it.item_type ? ` · ${it.item_type.toLowerCase()}` : ""}</div>
+                                </td>
+                                <td class="num">{it.charge || it.cost ? formatZAR(it.charge || it.cost) : "—"}</td>
+                                <td class="num">{it.invoiced ? formatZAR(it.invoiced) : "—"}</td>
+                              </tr>
+                            ))}
+                            <tr>
+                              <td style="font-weight:700">Total ({sect.length} lines)</td>
+                              <td class="num" style="font-weight:700">{formatZAR(sect.reduce((s2, it) => s2 + (it.charge || it.cost), 0))}</td>
+                              <td class="num" style="font-weight:700">{formatZAR(sect.reduce((s2, it) => s2 + it.invoiced, 0))}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  });
+                })()}
               </>
             ) : (
               <div class="callout" style="margin:2px 0 16px">
                 No allocation lines yet. Xero's API doesn't expose them — export <strong>Reports → Project
-                Financials</strong> as Excel and use <strong>Import Project Financials</strong> at the top of this page;
-                the full transaction list will appear here.
+                Financials</strong> as Excel and use <strong>Import Project Financials</strong> at the top of this page.
+                Export <strong>one month at a time</strong> for a dated, per-month ledger — monthly imports accumulate.
               </div>
             )}
 
