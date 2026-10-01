@@ -295,7 +295,9 @@ app.get("/app/projects", async (c) => {
     const windowMonths: string[] = [];
     for (let m = w.start; m <= w.end; m = addMonths(m, 1)) windowMonths.push(m);
     missingImports = windowMonths.filter((m) => m !== nowMonth && !importedMonths.has(m));
-    if (missingImports.length === 0 && windowMonths.some((m) => importedMonths.has(m) || m === nowMonth)) {
+    // Use dated imports whenever ANY window month is covered — partial coverage
+    // shows the covered months and names the gaps, rather than falling back.
+    if (windowMonths.some((m) => importedMonths.has(m)) || (windowMonths.includes(nowMonth) && allSnaps.length > 0)) {
       periodByName = new Map();
       for (const r of monthlyItems) {
         if (!windowMonths.includes(r.month)) continue;

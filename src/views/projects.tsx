@@ -151,11 +151,17 @@ export const ProjectsPage: FC<{
                 {period === "all"
                   ? <>Figures are project-to-date (all time) <Info text="Xero's Projects API returns lifetime totals, so a project spanning financial years shows its full history here." /></>
                   : periodByName
-                  ? <>Movement in {periodLabel} — from dated imports <Info text="Exact figures from your imported single-month Project Financials exports (the current month, where applicable, uses live movement since the last sync snapshot)." /></>
+                  ? <>Movement in {periodLabel}{missingImports.length > 0 ? " (imported months only)" : ""} — from dated imports <Info text="Exact figures from your imported single-month Project Financials exports (the current month, where applicable, uses live movement since the last sync snapshot)." /></>
                   : <>Movement in {periodLabel} <Info text="Period figures are the change in each project's totals over the window, computed from sync snapshots. The current month uses live totals." /></>}
               </span>
             </div>
 
+            {period !== "all" && periodByName && missingImports.length > 0 ? (
+              <div class="callout section-block">
+                Covers the imported months only — not yet imported: <strong>{missingImports.map(label).join(", ")}</strong>.
+                Import those months' Project Financials exports to complete this window.
+              </div>
+            ) : null}
             {period !== "all" && !periodByName && baselineMissing ? (
               <div class="callout section-block" style="border-left-color:#f6c453">
                 {missingImports.length > 0
