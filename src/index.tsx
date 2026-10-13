@@ -28,7 +28,7 @@ const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 import { ExpensesPage } from "./views/expenses";
 import { listExpenses, createExpense, toggleExpense, deleteExpense, setExpenseFrequency, upsertXeroExpenses, monthlyEquivalent, FREQUENCIES, listVendorRules, setVendorRule, clearVendorRule, deleteExpenseByXeroId, replaceVendorBills, listVendorBills, listAllVendorBills, billingPatterns } from "./data/expenses";
 import { VendorReviewPage, type AnnotatedVendor } from "./views/vendors";
-import { MonthlyExpensesPage, type MonthSummary, type VendorGroup, type ManualItem } from "./views/monthly_expenses";
+import { SpendDetailPage, type SpendVendorRow, type SpendDoc } from "./views/monthly_expenses";
 import { IncomePage, type ExpenseBucket } from "./views/income";
 import { CashLiquidityPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
@@ -1836,77 +1836,73 @@ app.get("/app/accounts/deals/export.csv", async (c) => {
 // ----- Monthly expense log -----
 
 app.get("/app/finance/costs/monthly", async (c) => {
-  const [bills, rules, names, allExpenses] = await Promise.all([
-    listAllVendorBills(c.env.DB),
-    listVendorRules(c.env.DB),
+  const [txns, names, allExpenses, lastSync] = await Promise.all([
+    listXeroTxns(c.env.DB),
     staffFirstNames(c.env.DB),
     listExpenses(c.env.DB),
+    getMeta(c.env.DB, "xero_last_sync"),
   ]);
-  // Manually captured recurring expenses have no Xero bills — add their
-  // monthly-equivalent charge to every month so the log is the whole business.
-  const manualItems: ManualItem[] = allExpenses
-    .filter((e) => e.source === "manual" && e.active)
-    .map((e) => ({ name: e.name, amount: monthlyEquivalent(e), frequency: e.frequency }));
-  const manualMonthly = manualItems.reduce((s, i) => s + i.amount, 0);
-  // Staff/developer filter: rule-based payroll & contractor exclusions plus a
-  // live name match. Manual "exclude" rules (non-recurring vendors) stay in
-  // the log — they're still real expenses that month.
-  const isStaffVendor = (key: string, name: string): boolean => {
-    const rule = rules.get(key);
-    if (rule?.rule === "exclude" && (rule.reason === "payroll match" || rule.reason === "contractor prefix")) return true;
-    return autoExcludeReason(name || rule?.name || "", names) != null;
-  };
-  const excludedKeys = new Set<string>();
-  const byMonth = new Map<string, { total: number; billCount: number; vendors: Set<string> }>();
-  const kept: typeof bills = [];
+  // Same period windows as the Recurring costs tab.
+  const pRaw = String(c.req.query("p") ?? "all");
+  const costPeriod = (["all", "month", "lastmonth", "quarter", "fy"] as const).includes(pRaw as any) ? (pRaw as "all" | "month" | "lastmonth" | "quarter" | "fy") : "all";
   const nowMonth = new Date().toISOString().slice(0, 7);
-  for (const b of bills) {
-    const bm = b.bill_date.slice(0, 7);
-    if (bm > nowMonth || bm < "2020-01") continue; // mis-captured dates in Xero
-    const name = b.vendor_name || rules.get(b.vendor_key)?.name || "";
-    if (isStaffVendor(b.vendor_key, name)) {
-      excludedKeys.add(b.vendor_key);
+  const fyStart = `${fiscalYearOf(nowMonth) - 1}-03`;
+  const qOff = (Number(nowMonth.slice(0, 4)) - Number(fyStart.slice(0, 4))) * 12 + Number(nowMonth.slice(5, 7)) - Number(fyStart.slice(5, 7));
+  const qStart = addMonths(fyStart, Math.floor(qOff / 3) * 3);
+  const win = {
+    all: { start: null as string | null, end: null as string | null, label: "synced window (18 mo)", months: 18 },
+    month: { start: `${nowMonth}-01`, end: null, label: label(nowMonth), months: 1 },
+    lastmonth: { start: `${addMonths(nowMonth, -1)}-01`, end: `${nowMonth}-01`, label: label(addMonths(nowMonth, -1)), months: 1 },
+    quarter: { start: `${qStart}-01`, end: null, label: `${label(qStart)} – ${label(nowMonth)}`, months: monthsBetweenIncl(qStart, nowMonth) },
+    fy: { start: `${fyStart}-01`, end: null, label: `${fyLabel(fiscalYearOf(nowMonth))} to date`, months: monthsBetweenIncl(fyStart, nowMonth) },
+  }[costPeriod];
+
+  // Every outgoing document in the window, grouped by vendor. Staff and
+  // contractor payees are excluded — they belong to Payroll.
+  const recurringNames = new Set(allExpenses.filter((e) => e.active && e.source === "xero").map((e) => (e.vendor || e.name).trim().toLowerCase()));
+  const byVendor = new Map<string, SpendVendorRow>();
+  const excluded = new Set<string>();
+  const inWindow = (d: string) => (!win.start || d >= win.start) && (!win.end || d < win.end);
+  const kept: typeof txns = [];
+  for (const t of txns) {
+    if (t.kind !== "bill" && t.kind !== "spend") continue;
+    if (!inWindow(t.txn_date)) continue;
+    const name = t.contact.trim();
+    if (!name || /^bank transaction$/i.test(name) || /^\(no contact\)$/i.test(name)) continue;
+    const isSars = /^SARS\b/i.test(name);
+    if (!isSars && autoExcludeReason(name, names) != null) {
+      excluded.add(name.toLowerCase());
       continue;
     }
-    kept.push(b);
-    const month = b.bill_date.slice(0, 7);
-    if (!byMonth.has(month)) byMonth.set(month, { total: 0, billCount: 0, vendors: new Set() });
-    const m = byMonth.get(month)!;
-    m.total += b.amount;
-    m.billCount++;
-    m.vendors.add(b.vendor_key);
-  }
-  const months: MonthSummary[] = [...byMonth.entries()]
-    .map(([month, m]) => ({
-      month,
-      billTotal: m.total,
-      manualTotal: manualMonthly,
-      total: m.total + manualMonthly,
-      billCount: m.billCount,
-      vendorCount: m.vendors.size,
-    }))
-    .sort((a, b) => (a.month < b.month ? 1 : -1));
-
-  const mRaw = c.req.query("m");
-  const selected = mRaw && isPeriod(mRaw) && byMonth.has(mRaw) ? mRaw : null;
-  let groups: VendorGroup[] = [];
-  if (selected) {
-    const byVendor = new Map<string, VendorGroup>();
-    for (const b of kept) {
-      if (b.bill_date.slice(0, 7) !== selected) continue;
-      if (!byVendor.has(b.vendor_key)) {
-        byVendor.set(b.vendor_key, { key: b.vendor_key, name: b.vendor_name || rules.get(b.vendor_key)?.name || "Unknown vendor", total: 0, bills: [] });
-      }
-      const g = byVendor.get(b.vendor_key)!;
-      g.total += b.amount;
-      g.bills.push(b);
+    kept.push(t);
+    if (!byVendor.has(name)) {
+      byVendor.set(name, { vendor: name, docs: 0, excl: 0, vat: 0, incl: 0, recurring: recurringNames.has(name.toLowerCase()), tax: isSars, manual: false });
     }
-    groups = [...byVendor.values()].sort((a, b) => b.total - a.total);
-    for (const g of groups) g.bills.sort((a, b) => (a.bill_date < b.bill_date ? 1 : -1));
+    const v = byVendor.get(name)!;
+    v.docs++;
+    v.excl += t.sub_total;
+    v.incl += t.total;
+    v.vat += t.total - t.sub_total;
   }
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  // Manual recurring items have no Xero documents — modelled over the window.
+  for (const e of allExpenses) {
+    if (e.source !== "manual" || !e.active) continue;
+    const amt = monthlyEquivalent(e) * win.months;
+    byVendor.set(`manual:${e.id}`, { vendor: e.name, docs: 0, excl: amt, vat: 0, incl: amt, recurring: true, tax: false, manual: true });
+  }
+  const rows = [...byVendor.values()].sort((a, b) => b.incl - a.incl);
+
+  const openVendor = c.req.query("open")?.trim() || null;
+  const openDocs: SpendDoc[] = openVendor
+    ? kept
+        .filter((t) => t.contact.trim() === openVendor)
+        .sort((a, b) => (a.txn_date < b.txn_date ? 1 : -1))
+        .map((t) => ({ date: t.txn_date, kind: t.kind, reference: t.reference, excl: t.sub_total, vat: t.total - t.sub_total, incl: t.total }))
+    : [];
+
   return c.html(
-    <MonthlyExpensesPage months={months} selected={selected} groups={groups} manualItems={selected ? manualItems : []} excludedCount={excludedKeys.size} currentMonth={currentMonth} />,
+    <SpendDetailPage rows={rows} openVendor={openVendor} openDocs={openDocs} costPeriod={costPeriod} periodLabel={win.label}
+      windowMonths={win.months} excludedCount={excluded.size} lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null} />,
   );
 });
 
