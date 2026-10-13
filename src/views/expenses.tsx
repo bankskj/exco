@@ -1,6 +1,7 @@
 import type { FC } from "hono/jsx";
 import { Layout, DateField } from "./layout";
 import { type RecurringExpense, type VendorBill, type BillingPattern, FREQUENCIES, monthlyEquivalent } from "../data/expenses";
+import type { VendorSpendTotal } from "../data/actuals";
 import type { XeroState } from "../lib/xero";
 import { formatZAR } from "../lib/money";
 import { formatDMY, formatDMYTime } from "../lib/period";
@@ -20,6 +21,15 @@ const PAGE_SIZE = 20;
 
 type SortKey = "name" | "amount" | "monthly";
 
+export type CostPeriodKey = "all" | "month" | "lastmonth" | "quarter" | "fy";
+const COST_PERIOD_TABS: { key: CostPeriodKey; label: string }[] = [
+  { key: "all", label: "All time" },
+  { key: "month", label: "This month" },
+  { key: "lastmonth", label: "Last month" },
+  { key: "quarter", label: "This quarter" },
+  { key: "fy", label: "This FY" },
+];
+
 export const ExpensesPage: FC<{
   expenses: RecurringExpense[];
   xero: XeroState;
@@ -29,8 +39,13 @@ export const ExpensesPage: FC<{
   openId: string | null;
   openBills: VendorBill[];
   patterns: Map<string, BillingPattern>;
+  costPeriod: CostPeriodKey;
+  periodLabel: string;
+  spendTotals: Map<string, VendorSpendTotal>;
   msg?: string;
-}> = ({ expenses, xero, page, sort, dir, openId, openBills, patterns, msg }) => {
+}> = ({ expenses, xero, page, sort, dir, openId, openBills, patterns, costPeriod, periodLabel, spendTotals, msg }) => {
+  const spendOf = (e: RecurringExpense): VendorSpendTotal | null =>
+    spendTotals.get((e.vendor || e.name).trim().toLowerCase()) ?? null;
   const active = expenses.filter((e) => e.active);
   const monthlyTotal = active.reduce((s, e) => s + monthlyEquivalent(e), 0);
   const fromXero = active.filter((e) => e.source === "xero").length;
@@ -40,10 +55,10 @@ export const ExpensesPage: FC<{
   // Sortable header link: clicking the active column flips direction; a new column gets its natural default.
   const sortHref = (col: SortKey) => {
     const nextDir = sort === col ? (dir === "asc" ? "desc" : "asc") : col === "name" ? "asc" : "desc";
-    return `/app/finance/costs?sort=${col}&dir=${nextDir}`;
+    return `/app/finance/costs?sort=${col}&dir=${nextDir}&p=${costPeriod}`;
   };
   const arrow = (col: SortKey) => (sort === col ? (dir === "asc" ? " ▲" : " ▼") : "");
-  const listQs = `sort=${sort}&dir=${dir}`;
+  const listQs = `sort=${sort}&dir=${dir}&p=${costPeriod}`;
   const vendorKey = (e: RecurringExpense) => (e.xero_id?.startsWith("vendor:") ? e.xero_id.slice(7) : null);
   const rowQs = `page=${p}&${listQs}`;
   // Billing-timing split: vendor pattern for synced rows; next-date day for manual ones.
@@ -85,7 +100,14 @@ export const ExpensesPage: FC<{
         </div>
 
         <FinanceTabs active="costs" />
-        <ExpenseTabs active="recurring" />
+        <div class="row" style="gap:10px;align-items:center">
+          <ExpenseTabs active="recurring" />
+          <div class="segmented" style="margin:8px 0 4px">
+            {COST_PERIOD_TABS.map((t) => (
+              <a href={`/app/finance/costs?sort=${sort}&dir=${dir}&p=${t.key}`} class={costPeriod === t.key ? "seg active" : "seg"}>{t.label}</a>
+            ))}
+          </div>
+        </div>
 
         {msg ? <div class="callout section-block">{msg}</div> : null}
 
@@ -94,6 +116,10 @@ export const ExpensesPage: FC<{
           <Kpi label="Annualised" value={formatZAR(monthlyTotal * 12)} />
           <Kpi label="From Xero" value={String(fromXero)} sub={xero.orgName ?? "not connected"} />
           <Kpi label="Last Xero sync" value={xero.lastSync ? formatDMYTime(xero.lastSync) : "—"} />
+          <Kpi label={`Billed — ${costPeriod === "all" ? "synced 18 mo" : periodLabel}`}
+            value={formatZAR(active.reduce((s2, e) => s2 + (spendOf(e)?.incl ?? 0), 0))} sub="tracked vendors · incl VAT" />
+          <Kpi label={`VAT on spend — ${costPeriod === "all" ? "synced 18 mo" : periodLabel}`}
+            value={formatZAR(active.reduce((s2, e) => s2 + Math.max(0, spendOf(e)?.vat ?? 0), 0))} sub="input VAT claimable" />
           <Kpi label="Mid-month (days 10–20)" value={formatZAR(midTotal)}
             sub={`${midRows.length} expense(s) · ${monthlyTotal ? Math.round((midTotal / monthlyTotal) * 100) : 0}% of monthly`} />
           <Kpi label="Month-end" value={formatZAR(endTotal)}
@@ -115,14 +141,16 @@ export const ExpensesPage: FC<{
           <div class="tablewrap">
             <table class="grid fixed wrap">
               <colgroup>
-                <col style="width:24%" />
-                <col style="width:12%" />
-                <col style="width:11%" />
-                <col style="width:15%" />
-                <col style="width:11%" />
+                <col style="width:20%" />
                 <col style="width:9%" />
-                <col style="width:7%" />
-                <col style="width:11%" />
+                <col style="width:9%" />
+                <col style="width:12%" />
+                <col style="width:9%" />
+                <col style="width:9%" />
+                <col style="width:9%" />
+                <col style="width:8%" />
+                <col style="width:6%" />
+                <col style="width:9%" />
               </colgroup>
               <thead>
                 <tr>
@@ -131,6 +159,8 @@ export const ExpensesPage: FC<{
                   <th><a href={sortHref("amount")} style="color:inherit">Amount{arrow("amount")}</a></th>
                   <th>Frequency</th>
                   <th><a href={sortHref("monthly")} style="color:inherit">Monthly equiv{arrow("monthly")}</a></th>
+                  <th title={`Actually billed in ${periodLabel}, from synced Xero documents (incl VAT)`}>Billed · {costPeriod === "all" ? "18 mo" : periodLabel}</th>
+                  <th title={`VAT on that spend in ${periodLabel} (document total − excl-VAT subtotal)`}>VAT</th>
                   <th>Next</th>
                   <th>Source</th>
                   <th></th>
@@ -159,6 +189,7 @@ export const ExpensesPage: FC<{
                         <input type="hidden" name="page" value={String(p)} />
                         <input type="hidden" name="sort" value={sort} />
                         <input type="hidden" name="dir" value={dir} />
+                        <input type="hidden" name="p" value={costPeriod} />
                         <select name="frequency" onchange="this.form.submit()"
                           style="width:100%;padding:4px 6px;font-size:12px;background:transparent;border-color:transparent"
                           title={e.frequency + (e.freq_locked ? " · manually set" : "")}>
@@ -172,6 +203,12 @@ export const ExpensesPage: FC<{
                       </form>
                     </td>
                     <td class="num"><strong>{formatZAR(monthlyEquivalent(e))}</strong></td>
+                    {(() => { const sp = spendOf(e); return (
+                      <>
+                        <td class="num">{sp && sp.incl ? formatZAR(sp.incl) : "—"}</td>
+                        <td class={`num ${sp && sp.vat > 0.005 ? "" : "muted"}`}>{sp ? (sp.vat > 0.005 ? formatZAR(sp.vat) : "no VAT") : "—"}</td>
+                      </>
+                    ); })()}
                     <td>{e.next_date ? formatDMY(e.next_date) : (() => { const k = vendorKey(e); const pat = k ? patterns.get(k) : null; return pat ? <span class="muted" style="font-size:12px">{pat.label}</span> : "—"; })()}</td>
                     <td>{e.source === "xero" ? <span class="badge recurring">xero</span> : <span class="badge actual">manual</span>}</td>
                     <td>
@@ -181,6 +218,7 @@ export const ExpensesPage: FC<{
                           <input type="hidden" name="page" value={String(p)} />
                           <input type="hidden" name="sort" value={sort} />
                           <input type="hidden" name="dir" value={dir} />
+                          <input type="hidden" name="p" value={costPeriod} />
                           <button class="btn btn-sm" type="submit">{e.active ? "Pause" : "Resume"}</button>
                         </form>
                         <form method="post" action="/app/expenses/delete" style="margin:0"
@@ -189,6 +227,7 @@ export const ExpensesPage: FC<{
                           <input type="hidden" name="page" value={String(p)} />
                           <input type="hidden" name="sort" value={sort} />
                           <input type="hidden" name="dir" value={dir} />
+                          <input type="hidden" name="p" value={costPeriod} />
                           <button class="btn btn-sm btn-danger" type="submit">✕</button>
                         </form>
                       </div>
@@ -196,7 +235,7 @@ export const ExpensesPage: FC<{
                   </tr>
                   {openId === e.id ? (
                     <tr>
-                      <td colspan={8} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={10} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <BillDrawer e={e} bills={openBills} pattern={(() => { const k = vendorKey(e); return k ? patterns.get(k) ?? null : null; })()} />
                       </td>
                     </tr>
@@ -207,6 +246,8 @@ export const ExpensesPage: FC<{
                   <td style="text-align:left">Total — all active ({active.length})</td>
                   <td></td><td></td><td></td>
                   <td class="num">{formatZAR(monthlyTotal)}</td>
+                  <td class="num">{formatZAR(active.reduce((s2, e) => s2 + (spendOf(e)?.incl ?? 0), 0))}</td>
+                  <td class="num">{formatZAR(active.reduce((s2, e) => s2 + Math.max(0, spendOf(e)?.vat ?? 0), 0))}</td>
                   <td></td><td></td><td></td>
                 </tr>
               </tbody>

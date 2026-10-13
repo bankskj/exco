@@ -45,7 +45,7 @@ import { AdminPage, DataQualityPage } from "./views/admin";
 import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
-import { replaceXeroTxns, listXeroTxns } from "./data/actuals";
+import { replaceXeroTxns, listXeroTxns, vendorSpendTotals } from "./data/actuals";
 import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, listMonthlyItemTotals, type ImportMeta } from "./data/projects";
 import { parseProjectFinancials, parsePeriod } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
@@ -1177,9 +1177,30 @@ async function xeroState(c: any): Promise<import("./lib/xero").XeroState> {
   };
 }
 
+const COST_PERIODS = ["all", "month", "lastmonth", "quarter", "fy"] as const;
+type CostPeriod = (typeof COST_PERIODS)[number];
+
 app.get("/app/finance/costs", async (c) => {
   const [expenses, xero] = await Promise.all([listExpenses(c.env.DB), xeroState(c)]);
   const msg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : undefined;
+  // Period window for billed/VAT figures (from synced Xero documents).
+  const pRaw = String(c.req.query("p") ?? "all");
+  const costPeriod: CostPeriod = (COST_PERIODS as readonly string[]).includes(pRaw) ? (pRaw as CostPeriod) : "all";
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const fyStart = `${fiscalYearOf(nowMonth) - 1}-03`;
+  const qOff = (Number(nowMonth.slice(0, 4)) - Number(fyStart.slice(0, 4))) * 12 + Number(nowMonth.slice(5, 7)) - Number(fyStart.slice(5, 7));
+  const qStart = addMonths(fyStart, Math.floor(qOff / 3) * 3);
+  const win: Record<CostPeriod, { start: string | null; end: string | null; label: string }> = {
+    all: { start: null, end: null, label: "synced window (18 mo)" },
+    month: { start: `${nowMonth}-01`, end: null, label: label(nowMonth) },
+    lastmonth: { start: `${addMonths(nowMonth, -1)}-01`, end: `${nowMonth}-01`, label: label(addMonths(nowMonth, -1)) },
+    quarter: { start: `${qStart}-01`, end: null, label: `${label(qStart)} – ${label(nowMonth)}` },
+    fy: { start: `${fyStart}-01`, end: null, label: `${fyLabel(fiscalYearOf(nowMonth))} to date` },
+  };
+  const w = win[costPeriod];
+  // end is exclusive for lastmonth (first day of this month); SQL uses <=, so step back a day.
+  const endIso = w.end ? new Date(Date.parse(w.end) - 86400_000).toISOString().slice(0, 10) : null;
+  const spendTotals = await vendorSpendTotals(c.env.DB, w.start, endIso);
   const pageN = Number(c.req.query("page"));
   const page = Number.isFinite(pageN) && pageN >= 1 ? Math.trunc(pageN) : 1;
   const sortRaw = c.req.query("sort");
@@ -1199,7 +1220,10 @@ app.get("/app/finance/costs", async (c) => {
     const key = row?.xero_id?.startsWith("vendor:") ? row.xero_id.slice(7) : null;
     if (key) openBills = await listVendorBills(c.env.DB, key);
   }
-  return c.html(<ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} openId={openId} openBills={openBills} patterns={patterns} msg={msg} />);
+  return c.html(
+    <ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} openId={openId} openBills={openBills}
+      patterns={patterns} costPeriod={costPeriod} periodLabel={w.label} spendTotals={spendTotals} msg={msg} />,
+  );
 });
 
 app.post("/app/expenses/add", async (c) => {
@@ -1226,6 +1250,7 @@ function expenseListQs(b: Record<string, unknown>): string {
   if (/^\d+$/.test(String(b.page))) q.set("page", String(b.page));
   if (["name", "amount", "monthly"].includes(String(b.sort))) q.set("sort", String(b.sort));
   if (["asc", "desc"].includes(String(b.dir))) q.set("dir", String(b.dir));
+  if (["all", "month", "lastmonth", "quarter", "fy"].includes(String(b.p))) q.set("p", String(b.p));
   return q.toString();
 }
 

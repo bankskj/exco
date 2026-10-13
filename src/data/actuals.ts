@@ -30,3 +30,28 @@ export async function listXeroTxns(db: D1Database): Promise<ActualTxn[]> {
     .all<ActualTxn>();
   return results ?? [];
 }
+
+export type VendorSpendTotal = { contact: string; excl: number; incl: number; vat: number };
+
+/** Spend per vendor (bills + spend money) in a window — VAT = incl − excl. */
+export async function vendorSpendTotals(db: D1Database, start: string | null, end: string | null): Promise<Map<string, VendorSpendTotal>> {
+  const where = ["kind IN ('bill','spend')"];
+  const binds: string[] = [];
+  if (start) {
+    where.push("txn_date >= ?");
+    binds.push(start);
+  }
+  if (end) {
+    where.push("txn_date <= ?");
+    binds.push(end);
+  }
+  const { results } = await db
+    .prepare(`SELECT contact, SUM(sub_total) AS excl, SUM(total) AS incl FROM xero_txns WHERE ${where.join(" AND ")} GROUP BY contact`)
+    .bind(...binds)
+    .all<{ contact: string; excl: number; incl: number }>();
+  const map = new Map<string, VendorSpendTotal>();
+  for (const r of results ?? []) {
+    map.set(r.contact.trim().toLowerCase(), { contact: r.contact, excl: r.excl, incl: r.incl, vat: r.incl - r.excl });
+  }
+  return map;
+}
