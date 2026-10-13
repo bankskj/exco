@@ -42,10 +42,18 @@ export const ExpensesPage: FC<{
   costPeriod: CostPeriodKey;
   periodLabel: string;
   spendTotals: Map<string, VendorSpendTotal>;
+  spendAllTime: Map<string, VendorSpendTotal>;
   msg?: string;
-}> = ({ expenses, xero, page, sort, dir, openId, openBills, patterns, costPeriod, periodLabel, spendTotals, msg }) => {
+}> = ({ expenses, xero, page, sort, dir, openId, openBills, patterns, costPeriod, periodLabel, spendTotals, spendAllTime, msg }) => {
   const spendOf = (e: RecurringExpense): VendorSpendTotal | null =>
     spendTotals.get((e.vendor || e.name).trim().toLowerCase()) ?? null;
+  // Monthly VAT: the vendor's effective VAT rate (all synced docs) × monthly equivalent.
+  const vatMonthly = (e: RecurringExpense): number | null => {
+    const all = spendAllTime.get((e.vendor || e.name).trim().toLowerCase());
+    if (!all || all.incl <= 0) return null;
+    const rate = Math.max(0, all.vat / all.incl);
+    return rate < 0.005 ? 0 : monthlyEquivalent(e) * rate;
+  };
   const active = expenses.filter((e) => e.active);
   const monthlyTotal = active.reduce((s, e) => s + monthlyEquivalent(e), 0);
   const fromXero = active.filter((e) => e.source === "xero").length;
@@ -141,16 +149,17 @@ export const ExpensesPage: FC<{
           <div class="tablewrap">
             <table class="grid fixed wrap">
               <colgroup>
-                <col style="width:20%" />
-                <col style="width:9%" />
-                <col style="width:9%" />
-                <col style="width:12%" />
-                <col style="width:9%" />
-                <col style="width:9%" />
+                <col style="width:18%" />
+                <col style="width:8%" />
+                <col style="width:8%" />
+                <col style="width:11%" />
                 <col style="width:9%" />
                 <col style="width:8%" />
-                <col style="width:6%" />
                 <col style="width:9%" />
+                <col style="width:8%" />
+                <col style="width:8%" />
+                <col style="width:5%" />
+                <col style="width:8%" />
               </colgroup>
               <thead>
                 <tr>
@@ -159,8 +168,9 @@ export const ExpensesPage: FC<{
                   <th><a href={sortHref("amount")} style="color:inherit">Amount{arrow("amount")}</a></th>
                   <th>Frequency</th>
                   <th><a href={sortHref("monthly")} style="color:inherit">Monthly equiv{arrow("monthly")}</a></th>
+                  <th title="Monthly VAT: the vendor's effective VAT rate from synced documents × the monthly equivalent">VAT / month</th>
                   <th title={`Actually billed in ${periodLabel}, from synced Xero documents (incl VAT)`}>Billed · {costPeriod === "all" ? "18 mo" : periodLabel}</th>
-                  <th title={`VAT on that spend in ${periodLabel} (document total − excl-VAT subtotal)`}>VAT</th>
+                  <th title={`VAT on that spend in ${periodLabel} (document total − excl-VAT subtotal)`}>VAT · {costPeriod === "all" ? "18 mo" : periodLabel}</th>
                   <th>Next</th>
                   <th>Source</th>
                   <th></th>
@@ -203,6 +213,9 @@ export const ExpensesPage: FC<{
                       </form>
                     </td>
                     <td class="num"><strong>{formatZAR(monthlyEquivalent(e))}</strong></td>
+                    {(() => { const vm = vatMonthly(e); return (
+                      <td class={`num ${vm === 0 || vm == null ? "muted" : ""}`}>{vm == null ? "—" : vm === 0 ? "no VAT" : formatZAR(vm)}</td>
+                    ); })()}
                     {(() => { const sp = spendOf(e); return (
                       <>
                         <td class="num">{sp && sp.incl ? formatZAR(sp.incl) : "—"}</td>
@@ -235,7 +248,7 @@ export const ExpensesPage: FC<{
                   </tr>
                   {openId === e.id ? (
                     <tr>
-                      <td colspan={10} style="text-align:left;background:#0c0f14;padding:14px 18px">
+                      <td colspan={11} style="text-align:left;background:#0c0f14;padding:14px 18px">
                         <BillDrawer e={e} bills={openBills} pattern={(() => { const k = vendorKey(e); return k ? patterns.get(k) ?? null : null; })()} />
                       </td>
                     </tr>
@@ -246,6 +259,7 @@ export const ExpensesPage: FC<{
                   <td style="text-align:left">Total — all active ({active.length})</td>
                   <td></td><td></td><td></td>
                   <td class="num">{formatZAR(monthlyTotal)}</td>
+                  <td class="num">{formatZAR(active.reduce((s2, e) => s2 + (vatMonthly(e) ?? 0), 0))}</td>
                   <td class="num">{formatZAR(active.reduce((s2, e) => s2 + (spendOf(e)?.incl ?? 0), 0))}</td>
                   <td class="num">{formatZAR(active.reduce((s2, e) => s2 + Math.max(0, spendOf(e)?.vat ?? 0), 0))}</td>
                   <td></td><td></td><td></td>

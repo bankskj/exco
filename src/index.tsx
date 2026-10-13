@@ -1201,6 +1201,8 @@ app.get("/app/finance/costs", async (c) => {
   // end is exclusive for lastmonth (first day of this month); SQL uses <=, so step back a day.
   const endIso = w.end ? new Date(Date.parse(w.end) - 86400_000).toISOString().slice(0, 10) : null;
   const spendTotals = await vendorSpendTotals(c.env.DB, w.start, endIso);
+  // All-time totals give each vendor's effective VAT rate for the monthly figure.
+  const spendAllTime = costPeriod === "all" ? spendTotals : await vendorSpendTotals(c.env.DB, null, null);
   const pageN = Number(c.req.query("page"));
   const page = Number.isFinite(pageN) && pageN >= 1 ? Math.trunc(pageN) : 1;
   const sortRaw = c.req.query("sort");
@@ -1222,7 +1224,7 @@ app.get("/app/finance/costs", async (c) => {
   }
   return c.html(
     <ExpensesPage expenses={expenses} xero={xero} page={page} sort={sort} dir={dir} openId={openId} openBills={openBills}
-      patterns={patterns} costPeriod={costPeriod} periodLabel={w.label} spendTotals={spendTotals} msg={msg} />,
+      patterns={patterns} costPeriod={costPeriod} periodLabel={w.label} spendTotals={spendTotals} spendAllTime={spendAllTime} msg={msg} />,
   );
 });
 
