@@ -12,8 +12,9 @@
     { "pattern": "exco.elula.online", "custom_domain": true }
   ],
   "triggers": {
-    // Monthly Xero recurring-expense sync: 04:00 UTC on the 1st (06:00 SAST)
-    "crons": ["0 4 1 * *"]
+    // Monthly full Xero sync: 04:00 UTC on the 1st (06:00 SAST).
+    // Daily repeating-invoice refresh: 03:30 UTC (05:30 SAST) — see DAILY_REPEATING_CRON.
+    "crons": ["0 4 1 * *", "30 3 * * *"]
   },
   "d1_databases": [
     {

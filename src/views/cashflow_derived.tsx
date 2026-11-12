@@ -9,7 +9,7 @@ import { lineChart, comboBars } from "../lib/charts";
 import { FinanceTabs } from "./income";
 
 const srcLabel = (s: string): string =>
-  s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : "avg";
+  s === "none" ? "—" : s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : "avg";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string; info?: string; badge?: "actual" | "forecast" | "estimate" | "manual" }> = ({ label, value, sub, tone, info, badge }) => (
   <div class="kpi">
@@ -55,7 +55,7 @@ export const CashLiquidityPage: FC<{
   const boundary = settings.actuals_through;
 
   const balanceLine = visible.map((c) => ({ label: shortLabel(c.month), value: c.balance, forecast: c.isForecast }));
-  const combo = visible.map((c) => ({ label: shortLabel(c.month), income: c.income, cost: c.cost, net: c.net, forecast: c.isForecast }));
+  const combo = visible.map((c) => ({ label: shortLabel(c.month), income: c.income + c.adjIncome + c.recIncome + c.openIncome + c.receivedIncome, cost: c.cost, net: c.net, forecast: c.isForecast }));
 
   return (
     <Layout title="Cash & Liquidity" authed section="finance" wide>
@@ -138,8 +138,8 @@ export const CashLiquidityPage: FC<{
             <table class="grid">
               <thead>
                 <tr>
-                  <th style="text-align:left">Month</th><th>Cash received</th><th>People paid</th>
-                  <th>Other paid</th><th>SARS (tax)</th><th>Recurring (manual)</th><th>Adjustments</th><th>Net movement</th><th>Closing cash</th><th></th>
+                  <th style="text-align:left">Month</th><th title="Actual months: cash received. Forecast months: manual other income, plus the trend estimate before the current month">Cash received / other</th><th>People paid</th>
+                  <th>Other paid</th><th>SARS (tax)</th><th>Recurring (manual)</th><th>Recurring invoices</th><th title="Unpaid invoices by due date, plus payments already received in the current month">Open / received</th><th>Adjustments</th><th>Net movement</th><th>Closing cash</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -151,6 +151,12 @@ export const CashLiquidityPage: FC<{
                     <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.otherSrc)}</span> : null}</td>
                     <td class="num">{formatZAR(c.sars)}{c.isForecast ? <span class="cellhint"> avg</span> : null}</td>
                     <td class="num">{formatZAR(c.recurring)}</td>
+                    <td class={`num ${c.recIncome - c.recBills < 0 ? "neg" : ""}`} title="Xero repeating invoices less repeating bills, by due date">
+                      {c.recIncome || c.recBills ? <a href="/app/finance/recurring">{formatZAR(c.recIncome - c.recBills)}</a> : "—"}
+                    </td>
+                    <td class="num" title="Unpaid Xero sales invoices by due date, plus payments already received this month">
+                      {c.openIncome + c.receivedIncome ? <a href="/app/finance/receivables">{formatZAR(c.openIncome + c.receivedIncome)}</a> : "—"}
+                    </td>
                     <td class={`num ${c.adjIncome - c.adjCost < 0 ? "neg" : ""}`}>{c.adjIncome || c.adjCost ? formatZAR(c.adjIncome - c.adjCost) : "—"}</td>
                     <td class={`num ${c.net < 0 ? "neg" : "pos"}`}>{formatZAR(c.net)}</td>
                     <td class={`num ${c.balance < 0 ? "neg" : ""}`}>{formatZAR(c.balance)}</td>

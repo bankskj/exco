@@ -11,7 +11,7 @@ import { addMonths, rangeInclusive, monthsBetween, fiscalYearOf } from "./period
 import type { CfActual } from "../data/cashflow";
 import type { CFSettings } from "./forecast";
 
-export type CfSource = "pnl" | "payroll" | "ctc" | "yoy" | "avg" | "manual";
+export type CfSource = "pnl" | "payroll" | "ctc" | "yoy" | "avg" | "manual" | "none";
 
 export type DerivedColumn = {
   month: string;
@@ -23,7 +23,11 @@ export type DerivedColumn = {
   sars: number; // SARS cash payments (VAT/PAYE settlements — not in the P&L)
   adjIncome: number; // additional income rows (projects/pipeline) — forecast months
   adjCost: number; // additional cost rows — forecast months
-  cost: number; // people + other + recurring + sars + adjCost
+  recIncome: number; // scheduled recurring income (approved Xero templates), by due month — forecast months
+  openIncome: number; // unpaid sales invoices, by due month (overdue → current month) — forecast months
+  receivedIncome: number; // current month only: cash already received on sales invoices so far this month
+  recBills: number; // committed recurring bills (Xero repeating bills), by due month — forecast months
+  cost: number; // people + other + recurring + sars + adjCost + recBills
   net: number;
   balance: number;
   incomeSrc: CfSource;
@@ -35,6 +39,26 @@ export type DerivedColumn = {
 export type CfOverrides = Map<string, { income?: number; people?: number; other?: number }>;
 /** Additional user rows (e.g. outstanding project income), applied to forecast months. */
 export type CfAdjustmentRow = { id: string; name: string; kind: "income" | "cost"; values: Map<string, number> };
+
+/**
+ * Income from real Xero data. From the current month on, forecast income is
+ * NOT a trend guess: it is recurring invoices + open invoices + deals, plus
+ * anything typed into the manual income row. Months between the books
+ * boundary and today keep the trend estimate (their invoices are already
+ * raised and partly paid, so neither schedules nor due dates describe them).
+ * Repeating bills are added as committed costs, with their run-rate netted
+ * out of the trend-based other costs so they are not counted twice.
+ */
+export type CfScheduled = {
+  income: Map<string, number>;
+  openInvoices: Map<string, number>;
+  received: Map<string, number>; // month → cash already received on invoices (the current month)
+  bills: Map<string, number>;
+  incomeRunRate: number;
+  billRunRate: number;
+  coveredFrom: string; // first month the projection covers — the current month (YYYY-MM)
+  coveredThrough: string; // last month the projection fully covers (YYYY-MM)
+};
 
 export type DerivedScenario = {
   name: "base" | "best" | "worst";
@@ -75,6 +99,7 @@ export function buildDerivedCashflow(
   // People fallback beyond the grid: CTC total of staff on payroll that month
   // (per month, so future-dated leavers count until their last paid month).
   activeCtcFor: (month: string) => number = () => 0,
+  scheduled: CfScheduled | null = null,
 ): DerivedCashflow {
   const boundary = s.actuals_through; // books complete through (inclusive)
   // Always cover the boundary's whole fiscal year, even when the balance is
@@ -126,6 +151,10 @@ export function buildDerivedCashflow(
     let otherSrc: CfSource = "pnl";
     let adjIncome = 0;
     let adjCost = 0;
+    let recIncome = 0;
+    let openIncome = 0;
+    let receivedIncome = 0;
+    let recBills = 0;
     if (!isForecast) {
       const a = actuals.get(month);
       income = a?.income ?? 0;
@@ -148,6 +177,18 @@ export function buildDerivedCashflow(
       if (ov.other != null) { other = ov.other; otherSrc = "manual"; }
       else if (gOther != null && lastYear && lastYear.other > 0) { other = lastYear.other * (1 + gOther); otherSrc = "yoy"; }
       else { other = otherAvg; otherSrc = "avg"; }
+      if (scheduled && month >= scheduled.coveredFrom) {
+        recIncome = scheduled.income.get(month) ?? 0;
+        openIncome = scheduled.openInvoices.get(month) ?? 0;
+        receivedIncome = scheduled.received.get(month) ?? 0;
+        // No income guess: only what is typed in the manual row.
+        if (incomeSrc !== "manual") { income = 0; incomeSrc = "none"; }
+        if (month <= scheduled.coveredThrough) {
+          recBills = scheduled.bills.get(month) ?? 0;
+          // Trend costs already include last year's recurring bills.
+          if (otherSrc !== "manual") other = Math.max(0, other - scheduled.billRunRate);
+        }
+      }
       for (const row of adjustments) {
         const v = row.values.get(month) ?? 0;
         if (row.kind === "income") adjIncome += v;
@@ -157,9 +198,9 @@ export function buildDerivedCashflow(
     // Manual recurring items are by definition outside Xero — additive always.
     const recurring = recurringManualMonthly;
     const sars = isForecast ? sarsAvg : sarsByMonth.get(month) ?? 0;
-    const cost = people + other + recurring + sars + adjCost;
-    const net = income + adjIncome - cost;
-    columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, cost, net, balance: 0, incomeSrc, peopleSrc, otherSrc });
+    const cost = people + other + recurring + sars + adjCost + recBills;
+    const net = income + adjIncome + recIncome + openIncome + receivedIncome - cost;
+    columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, recIncome, openIncome, receivedIncome, recBills, cost, net, balance: 0, incomeSrc, peopleSrc, otherSrc });
   }
 
   // The opening balance is the bank balance at the START of the anchor month;
@@ -177,7 +218,7 @@ export function buildDerivedCashflow(
     let lowest = { month: months[0] ?? start, balance: Infinity };
     let runwayMonth: string | null = null;
     const balances = columns.map((c) => {
-      let income = c.income + c.adjIncome;
+      let income = c.income + c.adjIncome + c.recIncome + c.openIncome + c.receivedIncome;
       let cost = c.cost;
       if (c.isForecast && name === "best") {
         income *= 1 + s.best_income_pct / 100;

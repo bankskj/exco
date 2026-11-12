@@ -275,15 +275,70 @@ export function vendorToBill(v: VendorSummary, monthsBack = 6): XeroRepeatingBil
   };
 }
 
-/** Authorised repeating BILLS (Type=ACCPAY) from the connected org. */
-export async function fetchRepeatingBills(accessToken: string, tenantId: string): Promise<XeroRepeatingBill[]> {
+/** Every repeating invoice template (sales and bills) — the raw Xero payload. */
+export async function fetchRepeatingRaw(accessToken: string, tenantId: string): Promise<any[]> {
   const res = await fetch(REPEATING_URL, {
     headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
   });
   if (!res.ok) throw new Error(`Xero RepeatingInvoices ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as any;
+  return data.RepeatingInvoices ?? [];
+}
+
+export type XeroRepeatingSchedule = {
+  xero_id: string;
+  type: "ACCREC" | "ACCPAY";
+  status: "AUTHORISED" | "DRAFT";
+  contact: string | null;
+  reference: string | null;
+  sub_total: number;
+  total: number;
+  currency: string;
+  unit: "WEEKLY" | "MONTHLY";
+  period: number;
+  next_date: string | null;
+  end_date: string | null;
+  due_day: number | null;
+  due_type: string | null;
+};
+
+/**
+ * Live repeating schedules, sales and bills. DRAFT templates (which create
+ * draft invoices someone must approve) are kept and flagged; deleted ones drop.
+ */
+export function toSchedules(raw: any[]): XeroRepeatingSchedule[] {
+  const out: XeroRepeatingSchedule[] = [];
+  for (const ri of raw) {
+    if (ri.Type !== "ACCREC" && ri.Type !== "ACCPAY") continue;
+    if (ri.Status !== "AUTHORISED" && ri.Status !== "DRAFT") continue;
+    const sched = ri.Schedule ?? {};
+    const firstLine = (ri.LineItems ?? [])[0];
+    const dueDay = Number(sched.DueDate);
+    out.push({
+      xero_id: String(ri.RepeatingInvoiceID),
+      type: ri.Type,
+      status: ri.Status,
+      contact: ri.Contact?.Name ? String(ri.Contact.Name) : null,
+      reference: (ri.Reference || firstLine?.Description) ? String(ri.Reference || firstLine?.Description).slice(0, 120) : null,
+      sub_total: Number(ri.SubTotal ?? ri.Total ?? 0),
+      total: Number(ri.Total ?? 0),
+      currency: String(ri.CurrencyCode ?? "ZAR"),
+      unit: sched.Unit === "WEEKLY" ? "WEEKLY" : "MONTHLY",
+      period: Math.max(1, Number(sched.Period ?? 1) || 1),
+      next_date: parseXeroDate(sched.NextScheduledDate),
+      end_date: parseXeroDate(sched.EndDate),
+      due_day: Number.isFinite(dueDay) ? dueDay : null,
+      due_type: sched.DueDateType ? String(sched.DueDateType) : null,
+    });
+  }
+  return out;
+}
+
+/** Authorised repeating BILLS (Type=ACCPAY) from the connected org. */
+export async function fetchRepeatingBills(accessToken: string, tenantId: string, raw?: any[]): Promise<XeroRepeatingBill[]> {
+  const list = raw ?? (await fetchRepeatingRaw(accessToken, tenantId));
   const out: XeroRepeatingBill[] = [];
-  for (const ri of data.RepeatingInvoices ?? []) {
+  for (const ri of list) {
     if (ri.Type !== "ACCPAY") continue; // bills only — expenses, not sales
     if (ri.Status !== "AUTHORISED") continue;
     const sched = ri.Schedule ?? {};
@@ -451,6 +506,9 @@ export type XeroTxn = {
   id: string;
   kind: "sale" | "bill" | "spend";
   date: string; // YYYY-MM-DD
+  dueDate: string | null; // YYYY-MM-DD — invoices/bills only
+  paidOn: string | null; // FullyPaidOnDate — invoices/bills only
+  payments: { date: string; amount: number }[]; // dated payments (incl VAT) when Xero returns them
   contact: string;
   reference: string | null;
   subTotal: number; // excl VAT
@@ -498,6 +556,11 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
       id: String(id),
       kind,
       date,
+      dueDate: parseXeroDate(row.DueDate),
+      paidOn: parseXeroDate(row.FullyPaidOnDate),
+      payments: (Array.isArray(row.Payments) ? row.Payments : [])
+        .map((p: any) => ({ date: parseXeroDate(p.Date) ?? "", amount: Number(p.Amount ?? 0) }))
+        .filter((p: { date: string; amount: number }) => p.date && p.amount),
       contact: String(row.Contact?.Name ?? "").trim() || "(no contact)",
       reference: ref,
       subTotal: Number(row.SubTotal ?? row.Total ?? 0),
