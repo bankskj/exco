@@ -46,15 +46,27 @@ npm run deploy
 
 ## Routes
 
-| Route            | Access    | Purpose                         |
-|------------------|-----------|---------------------------------|
-| `/`              | public    | Landing page                    |
-| `/login`         | public    | Password sign-in                |
-| `/app`           | protected | Dashboard (3 sections)          |
-| `/app/accounts`  | protected | Accounts (stub)                 |
-| `/app/payroll`   | protected | Payroll (stub)                  |
-| `/app/hr`        | protected | HR (stub)                       |
-| `/healthz`       | public    | Health check                    |
+| Route                      | Access    | Purpose                                        |
+|----------------------------|-----------|------------------------------------------------|
+| `/`                        | public    | Landing page                                   |
+| `/login`                   | public    | Password sign-in (+ optional name for audit)   |
+| `/healthz`                 | public    | Health check                                   |
+| `/app`                     | protected | Executive overview (KPI cards, sync)           |
+| `/app/finance`             | protected | Finance: overview, cash, P&L, receivables, forecast, costs, transactions |
+| `/app/clients`             | protected | Client billing: 12-client monthly P&L summary  |
+| `/app/clients/:id`         | protected | Client tracker (FY months, quarters, drills)   |
+| `/app/clients/settings`    | protected | Clients, projects, mappings, treatments, staff |
+| `/app/clients/close`       | protected | Month-close checklist, snapshots, audit        |
+| `/app/allocations`         | protected | Staff share % grid per month                   |
+| `/app/costs`               | protected | Cost inbox (assign / split / rules / queues)   |
+| `/app/costs/rules`         | protected | Cost rule editor with preview                  |
+| `/app/revenue`             | protected | Revenue lines, contact mapping, overrides      |
+| `/app/pipeline`            | protected | Deals & commissions                            |
+| `/app/payroll`, `/app/hr`  | protected | People                                         |
+| `/app/admin`               | protected | Xero connection, data quality, vendors         |
+
+Full Clients-module behaviour: [docs/client-billing.md](docs/client-billing.md).
+Old `/app/projects` URLs redirect to `/app/clients`.
 
 ## Roadmap
 
