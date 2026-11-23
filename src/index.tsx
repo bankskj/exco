@@ -56,7 +56,7 @@ import type { PeriodResult, ClientResult, ProjectResult, CostRule, StaffAllocati
 import {
   BillingError, getBillingPeriod, listBillingPeriods, setOverheadBasis, closePeriod, reopenPeriod, getSnapshot, getSnapshots,
   loadPeriodInput, loadPeriodInputs, syncBillingLedgers, mapContact, deleteContactMapping, addStaffPayee, deleteStaffPayee, listStaffPayees,
-  setEmployeeBillingSettings, listClients, createClient, listBillingProjects, createProject, updateProject,
+  setEmployeeBillingSettings, seedNameAliases, listClients, createClient, listBillingProjects, createProject, updateProject,
   closeProject, listCategories as listGlCategories, setCategoryTreatment, listContactMappings, setFixedShares,
   saveAllocations, copyAllocationsForward, clearAllocations, listDefaultAllocations, applyDefaultAllocations,
   listRevenueLinesForPeriods, listCostLinesForPeriods,
@@ -2308,7 +2308,11 @@ app.post("/app/clients/settings/staff", settingsAction("staff", async (c, b, act
   await setEmployeeBillingSettings(c.env.DB, String(b.employee ?? ""), target, parseMoney(String(b.loading_pct ?? "0")) || 0, actor);
 }));
 app.post("/app/clients/settings/payee", settingsAction("staff", async (c, b, actor) => {
-  await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : "contains", actor);
+  const mode = b.match_mode === "exact" ? "exact" : b.match_mode === "word" ? "word" : "contains";
+  await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), mode, actor);
+}));
+app.post("/app/clients/settings/payees/seed", settingsAction("staff", async (c, _b, actor) => {
+  await seedNameAliases(c.env.DB, actor);
 }));
 app.post("/app/clients/settings/payee/delete", settingsAction("staff", async (c, b, actor) => {
   await deleteStaffPayee(c.env.DB, String(b.id ?? ""), actor);
@@ -2861,7 +2865,7 @@ app.post("/app/costs/split", async (c) => {
 app.post("/app/costs/map-payee", async (c) => {
   const b = await c.req.parseBody();
   try {
-    await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : "contains", (await getActor(c)) ?? "");
+    await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : b.match_mode === "word" ? "word" : "contains", (await getActor(c)) ?? "");
   } catch (e) {
     return billing409(c, e);
   }

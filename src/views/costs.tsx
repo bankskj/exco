@@ -201,6 +201,7 @@ export const CostInboxPage: FC<CostInboxPageProps> = ({
                                 placeholder="payee match text"
                               />
                               <select name="match_mode" style="width:auto;padding:6px 8px;font-size:13px">
+                                <option value="word">whole word</option>
                                 <option value="exact">exact</option>
                                 <option value="contains">contains</option>
                               </select>

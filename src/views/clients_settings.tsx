@@ -41,7 +41,7 @@ export type SettingsStaff = {
   name: string;
   defaultTarget: "general" | "overhead";
   loadingPct: number;
-  payees: { id: string; matchText: string; matchMode: "exact" | "contains" }[];
+  payees: { id: string; matchText: string; matchMode: "exact" | "contains" | "word" }[];
 };
 
 export type SettingsTab = "clients" | "contacts" | "accounts" | "staff" | "overhead";
@@ -408,14 +408,22 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
               </tbody>
             </table>
           </div>
+          <form method="post" action="/app/clients/settings/payees/seed" class="row" style="gap:8px;margin-top:12px">
+            <button class="btn btn-sm btn-primary" type="submit">Seed name aliases for everyone</button>
+            <span class="muted" style="font-size:12px">
+              Adds each person's register name as a whole-word alias (so “Dom” never matches “domain”) and re-matches
+              open months. Names already covered are skipped.
+            </span>
+          </form>
           <form method="post" action="/app/clients/settings/payee" class="row" style="gap:8px;margin-top:10px">
             <select name="employee" style="width:auto;min-width:180px;padding:6px 8px;font-size:13px">
               {staff.map((s) => <option value={s.employeeId}>{s.name}</option>)}
             </select>
             <input type="text" name="match_text" required placeholder="Payee match text" style="width:220px;padding:6px 8px;font-size:13px" />
             <select name="match_mode" style="width:auto;padding:6px 8px;font-size:13px">
-              <option value="exact">exact</option>
+              <option value="word" selected>whole word</option>
               <option value="contains">contains</option>
+              <option value="exact">exact</option>
             </select>
             <button class="btn btn-sm" type="submit">+ Add alias</button>
           </form>

@@ -371,10 +371,13 @@ function provisionalCategory(code: string, kind: "revenue" | "cost"): { group: s
 function payeeHit(matchText: string, matchMode: string, supplier: string | null, reference: string | null, description: string | null): boolean {
   const t = matchText.trim().toLowerCase();
   if (!t) return false;
+  // "word" matches whole words only, so the alias "Dom" never hits "domain"
+  // and "Alex" never hits "Alexander Forbes".
+  const wordRe = matchMode === "word" ? new RegExp(`\\b${t.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&")}\\b`, "i") : null;
   for (const field of [supplier, reference, description]) {
     if (!field) continue;
     const v = String(field).toLowerCase();
-    if (matchMode === "exact" ? v.trim() === t : v.includes(t)) return true;
+    if (wordRe ? wordRe.test(v) : matchMode === "exact" ? v.trim() === t : v.includes(t)) return true;
   }
   return false;
 }
@@ -546,7 +549,9 @@ export async function deleteContactMapping(db: D1Database, id: string, actor: st
 }
 
 /** Add a payee alias and re-resolve unmatched open-period cost lines. Returns the lines matched. */
-export async function addStaffPayee(db: D1Database, employeeId: string, matchText: string, matchMode: "exact" | "contains", actor: string): Promise<number> {
+export type PayeeMatchMode = "exact" | "contains" | "word";
+
+export async function addStaffPayee(db: D1Database, employeeId: string, matchText: string, matchMode: PayeeMatchMode, actor: string): Promise<number> {
   const id = uuid();
   await db.batch([
     db.prepare("INSERT INTO staff_payees (id, employee_id, match_text, match_mode) VALUES (?, ?, ?, ?) ON CONFLICT(match_text) DO UPDATE SET employee_id = excluded.employee_id, match_mode = excluded.match_mode").bind(id, employeeId, matchText, matchMode),
@@ -569,7 +574,28 @@ export async function deleteStaffPayee(db: D1Database, id: string, actor: string
   ]);
 }
 
-export type StaffPayeeRow = { id: string; employeeId: string; employeeName: string; matchText: string; matchMode: "exact" | "contains" };
+/**
+ * Give every staff member their register name as a standard word-boundary
+ * alias (skipping names already covered), then re-resolve open-period lines.
+ * Returns { aliases, matched }.
+ */
+export async function seedNameAliases(db: D1Database, actor: string): Promise<{ aliases: number; matched: number }> {
+  const employees = ((await db.prepare("SELECT id, name FROM employees ORDER BY name").all()).results ?? []) as any[];
+  const existing = new Set(
+    (((await db.prepare("SELECT match_text FROM staff_payees").all()).results) ?? []).map((r: any) => String(r.match_text).trim().toLowerCase()),
+  );
+  let aliases = 0;
+  let matched = 0;
+  for (const e of employees) {
+    const name = String(e.name).trim();
+    if (!name || existing.has(name.toLowerCase())) continue;
+    matched += await addStaffPayee(db, String(e.id), name, "word", actor);
+    aliases++;
+  }
+  return { aliases, matched };
+}
+
+export type StaffPayeeRow = { id: string; employeeId: string; employeeName: string; matchText: string; matchMode: PayeeMatchMode };
 
 export async function listStaffPayees(db: D1Database): Promise<StaffPayeeRow[]> {
   const { results } = await db
@@ -580,7 +606,7 @@ export async function listStaffPayees(db: D1Database): Promise<StaffPayeeRow[]> 
     employeeId: String(r.employee_id),
     employeeName: String(r.employee_name),
     matchText: String(r.match_text),
-    matchMode: r.match_mode as "exact" | "contains",
+    matchMode: r.match_mode as PayeeMatchMode,
   }));
 }
 
