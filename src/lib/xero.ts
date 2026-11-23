@@ -677,3 +677,223 @@ export async function fetchVatOwing(accessToken: string, tenantId: string): Prom
   walk(data.Reports?.[0]?.Rows ?? []);
   return { amount, accounts };
 }
+
+// ---- Client Billing: chart of accounts + line-level ledger fetch -------------
+
+export type XeroBillingRevenueRow = {
+  sourceRef: string; // LineItemID (fallback: `${docId}:${index}` when missing)
+  xeroDocId: string;
+  docNumber: string | null;
+  docType: "ACCREC" | "ACCRECCREDIT" | "RECEIVE";
+  txnDate: string; // YYYY-MM-DD
+  contactName: string | null;
+  xeroContactId: string | null;
+  glCode: string | null;
+  description: string | null;
+  amountC: number; // ZAR cents excl VAT; credit notes negative
+  currency: string;
+  fxRate: number | null;
+  amountFxC: number | null;
+  status: string;
+};
+
+export type XeroBillingCostRow = {
+  sourceRef: string; // LineItemID (fallback: `${docId}:${index}` when missing)
+  xeroDocId: string;
+  docKind: "bill" | "spend";
+  txnDate: string; // YYYY-MM-DD
+  supplier: string | null; // Contact name
+  reference: string | null;
+  description: string | null;
+  glCode: string | null;
+  amountC: number; // ZAR cents excl VAT; credit notes negative
+  currency: string;
+  fxRate: number | null;
+  amountFxC: number | null;
+  status: string;
+};
+
+export type XeroAccount = { code: string; name: string; type: string; cls: string | null };
+
+/** Rate-limit-aware GET for the billing sync (mirrors fetchActualTxns). Calls run SEQUENTIALLY — Xero rejects concurrent bursts. */
+function billingGet(accessToken: string, tenantId: string) {
+  const base = { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" };
+  return async (url: string, extra?: Record<string, string>): Promise<any> => {
+    const headers = extra ? { ...base, ...extra } : base;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch(url, { headers });
+      if (res.status === 429) {
+        const wait = Math.min(60, Number(res.headers.get("Retry-After") ?? 10) || 10);
+        await new Promise((r) => setTimeout(r, (wait + 1) * 1000));
+        continue;
+      }
+      if (res.status === 304) return null; // If-Modified-Since: nothing changed
+      if (!res.ok) throw new Error(`Xero ${res.status} ${url.split("?")[0].split("/").pop()}: ${(await res.text()).slice(0, 200)}`);
+      return res.json();
+    }
+    throw new Error("Xero rate limit: retries exhausted");
+  };
+}
+
+/** GET /Accounts (not paged) — accounts with a Code only. */
+export async function fetchChartOfAccounts(accessToken: string, tenantId: string): Promise<XeroAccount[]> {
+  const get = billingGet(accessToken, tenantId);
+  const data = await get("https://api.xero.com/api.xro/2.0/Accounts");
+  const out: XeroAccount[] = [];
+  for (const a of data?.Accounts ?? []) {
+    if (a.Code == null || String(a.Code) === "") continue;
+    out.push({
+      code: String(a.Code),
+      name: String(a.Name ?? ""),
+      type: String(a.Type ?? ""),
+      cls: a.Class != null ? String(a.Class) : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Every billing-relevant LINE since `sinceISO` (YYYY-MM-DD): ACCREC invoices
+ * and RECEIVE bank txns (revenue), ACCPAY bills and SPEND bank txns (costs),
+ * plus credit notes with negated amounts. When `modifiedSince` is given, a
+ * second If-Modified-Since pass (no date filter) also captures edits/voids on
+ * older docs; merged and de-duped by sourceRef/docId. VOIDED/DELETED docs
+ * surface in removedDocIds; DRAFT/SUBMITTED are skipped entirely.
+ */
+export async function fetchBillingDocs(
+  accessToken: string,
+  tenantId: string,
+  sinceISO: string,
+  modifiedSince: string | null,
+): Promise<{ revenue: XeroBillingRevenueRow[]; costs: XeroBillingCostRow[]; removedDocIds: string[] }> {
+  const get = billingGet(accessToken, tenantId);
+  const [sy, sm, sd] = sinceISO.split("-");
+  const dateFilter = `Date >= DateTime(${sy},${sm},${sd})`;
+
+  const revenue = new Map<string, XeroBillingRevenueRow>();
+  const costs = new Map<string, XeroBillingCostRow>();
+  const removed = new Set<string>();
+
+  /** Drop every previously collected line of a doc (second-pass refresh / void). */
+  const dropDoc = (docId: string) => {
+    for (const [k, r] of revenue) if (r.xeroDocId === docId) revenue.delete(k);
+    for (const [k, r] of costs) if (r.xeroDocId === docId) costs.delete(k);
+  };
+
+  const ACTIVE = new Set(["AUTHORISED", "PAID"]); // BankTransactions only ever reach AUTHORISED
+  const REMOVED = new Set(["VOIDED", "DELETED"]);
+
+  type LinePiece = { sourceRef: string; glCode: string | null; description: string | null; amountC: number; fxRate: number | null; amountFxC: number | null };
+
+  const extractLines = (doc: any, docId: string, negate: boolean): LinePiece[] => {
+    const inclusive = String(doc.LineAmountTypes ?? "") === "Inclusive";
+    const currency = String(doc.CurrencyCode ?? "ZAR");
+    // FX direction: Xero's CurrencyRate is defined so that the base-currency
+    // (ZAR) amount = foreign amount / CurrencyRate. VERIFY this direction
+    // against one known EUR invoice before trusting multicurrency totals.
+    const rate = Number(doc.CurrencyRate ?? 0) || null;
+    const fx = currency !== "" && currency !== "ZAR";
+    const out: LinePiece[] = [];
+    (doc.LineItems ?? []).forEach((li: any, i: number) => {
+      const lineAmount = Number(li.LineAmount ?? 0);
+      let excl = inclusive ? lineAmount - Number(li.TaxAmount ?? 0) : lineAmount;
+      if (negate) excl = -excl;
+      out.push({
+        sourceRef: li.LineItemID ? String(li.LineItemID) : `${docId}:${i}`,
+        glCode: li.AccountCode != null && String(li.AccountCode) !== "" ? String(li.AccountCode) : null,
+        description: li.Description ? String(li.Description) : null,
+        amountC: fx ? Math.round((excl / (rate || 1)) * 100) : Math.round(excl * 100),
+        fxRate: fx ? rate : null,
+        amountFxC: fx ? Math.round(excl * 100) : null,
+      });
+    });
+    return out;
+  };
+
+  const handleRevenueDoc = (doc: any, docId: string, docType: XeroBillingRevenueRow["docType"], docNumber: string | null, negate: boolean, refresh: boolean) => {
+    if (refresh) dropDoc(docId);
+    const status = String(doc.Status ?? "");
+    if (REMOVED.has(status)) {
+      removed.add(docId);
+      return;
+    }
+    if (!ACTIVE.has(status)) return; // DRAFT/SUBMITTED
+    const txnDate = parseXeroDate(doc.Date);
+    if (!txnDate) return;
+    const contactName = String(doc.Contact?.Name ?? "").trim() || null;
+    const xeroContactId = doc.Contact?.ContactID ? String(doc.Contact.ContactID) : null;
+    const currency = String(doc.CurrencyCode ?? "ZAR");
+    for (const li of extractLines(doc, docId, negate)) {
+      revenue.set(li.sourceRef, {
+        sourceRef: li.sourceRef, xeroDocId: docId, docNumber, docType, txnDate, contactName, xeroContactId,
+        glCode: li.glCode, description: li.description, amountC: li.amountC, currency, fxRate: li.fxRate, amountFxC: li.amountFxC, status,
+      });
+    }
+  };
+
+  const handleCostDoc = (doc: any, docId: string, docKind: XeroBillingCostRow["docKind"], reference: string | null, negate: boolean, refresh: boolean) => {
+    if (refresh) dropDoc(docId);
+    const status = String(doc.Status ?? "");
+    if (REMOVED.has(status)) {
+      removed.add(docId);
+      return;
+    }
+    if (!ACTIVE.has(status)) return;
+    const txnDate = parseXeroDate(doc.Date);
+    if (!txnDate) return;
+    const supplier = String(doc.Contact?.Name ?? "").trim() || null;
+    const currency = String(doc.CurrencyCode ?? "ZAR");
+    for (const li of extractLines(doc, docId, negate)) {
+      costs.set(li.sourceRef, {
+        sourceRef: li.sourceRef, xeroDocId: docId, docKind, txnDate, supplier, reference,
+        glCode: li.glCode, description: li.description, amountC: li.amountC, currency, fxRate: li.fxRate, amountFxC: li.amountFxC, status,
+      });
+    }
+  };
+
+  // One pass over all five endpoints; `secondPass` sends If-Modified-Since
+  // with NO date filter (Xero then returns only docs changed since then).
+  const runPass = async (secondPass: boolean) => {
+    const extra = secondPass ? { "If-Modified-Since": new Date(modifiedSince!).toUTCString() } : undefined;
+    const withDate = (typeWhere: string | null): string | null => {
+      if (secondPass) return typeWhere;
+      return typeWhere ? `${typeWhere} AND ${dateFilter}` : dateFilter;
+    };
+    // `page` makes Xero include LineItems; a page holds up to 100 docs.
+    const paged = async (resource: string, listKey: string, where: string | null, onDoc: (d: any) => void) => {
+      for (let page = 1; page <= 120; page++) {
+        const q = new URLSearchParams({ page: String(page) });
+        if (where) q.set("where", where);
+        const data = await get(`https://api.xero.com/api.xro/2.0/${resource}?${q.toString()}`, extra);
+        const list = data?.[listKey] ?? [];
+        for (const d of list) onDoc(d);
+        if (list.length < 100) break;
+      }
+    };
+
+    await paged("Invoices", "Invoices", withDate(`Type=="ACCREC"`), (inv) =>
+      handleRevenueDoc(inv, String(inv.InvoiceID), "ACCREC", inv.InvoiceNumber ? String(inv.InvoiceNumber) : null, false, secondPass));
+    await paged("Invoices", "Invoices", withDate(`Type=="ACCPAY"`), (inv) =>
+      handleCostDoc(inv, String(inv.InvoiceID), "bill", inv.InvoiceNumber ? String(inv.InvoiceNumber) : inv.Reference ? String(inv.Reference) : null, false, secondPass));
+    await paged("CreditNotes", "CreditNotes", withDate(null), (cn) => {
+      const id = String(cn.CreditNoteID);
+      const num = cn.CreditNoteNumber ? String(cn.CreditNoteNumber) : cn.Reference ? String(cn.Reference) : null;
+      if (cn.Type === "ACCRECCREDIT") handleRevenueDoc(cn, id, "ACCRECCREDIT", num, true, secondPass);
+      else if (cn.Type === "ACCPAYCREDIT") handleCostDoc(cn, id, "bill", num, true, secondPass);
+    });
+    await paged("BankTransactions", "BankTransactions", withDate(`Type=="SPEND"`), (bt) =>
+      handleCostDoc(bt, String(bt.BankTransactionID), "spend", bt.Reference ? String(bt.Reference) : null, false, secondPass));
+    // RECEIVE rows are returned unfiltered — the data layer keeps only lines
+    // coded to revenue accounts.
+    await paged("BankTransactions", "BankTransactions", withDate(`Type=="RECEIVE"`), (bt) =>
+      handleRevenueDoc(bt, String(bt.BankTransactionID), "RECEIVE", bt.Reference ? String(bt.Reference) : null, false, secondPass));
+  };
+
+  await runPass(false);
+  if (modifiedSince) await runPass(true);
+
+  // A doc voided in the second pass may have emitted lines in the first.
+  for (const id of removed) dropDoc(id);
+
+  return { revenue: [...revenue.values()], costs: [...costs.values()], removedDocIds: [...removed] };
+}
