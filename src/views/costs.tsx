@@ -56,14 +56,25 @@ const TargetSelect: FC<{ name: string; projects: { id: string; label: string }[]
   name,
   projects,
   allowEmpty,
-}) => (
-  <select name={name} style="width:auto;min-width:200px;padding:6px 8px;font-size:13px">
-    {allowEmpty ? <option value="">—</option> : null}
-    {projects.map((p) => <option value={p.id}>{p.label}</option>)}
-    <option value="overhead">Shared Overhead</option>
-    <option value="excluded">Excluded</option>
-  </select>
-);
+}) => {
+  const clients = projects.filter((p) => !p.id.startsWith("staff:"));
+  const staff = projects.filter((p) => p.id.startsWith("staff:"));
+  return (
+    <select name={name} style="width:auto;min-width:200px;padding:6px 8px;font-size:13px">
+      {allowEmpty ? <option value="">—</option> : null}
+      <optgroup label="Clients & projects">
+        {clients.map((p) => <option value={p.id}>{p.label}</option>)}
+      </optgroup>
+      <optgroup label="Pool / excluded">
+        <option value="overhead">Shared Overhead</option>
+        <option value="excluded">Excluded</option>
+      </optgroup>
+      <optgroup label="Staff — follows their share %">
+        {staff.map((p) => <option value={p.id}>{p.label.replace(/^Staff: /, "")}</option>)}
+      </optgroup>
+    </select>
+  );
+};
 
 /**
  * Cost inbox — every cost line in the period, split into queues (tabs). Row
@@ -476,8 +487,15 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
                         <td style="padding:3px 14px 3px 0">
                           <select name={`split_target_${i}`} style="width:auto;min-width:200px;padding:6px 8px;font-size:13px">
                             <option value="" selected={sel === ""}>—</option>
-                            {projects.map((p) => <option value={p.id} selected={sel === p.id}>{p.label}</option>)}
-                            <option value="overhead" selected={sel === "overhead"}>Shared Overhead</option>
+                            <optgroup label="Clients & projects">
+                              {projects.filter((p) => !p.id.startsWith("staff:")).map((p) => <option value={p.id} selected={sel === p.id}>{p.label}</option>)}
+                            </optgroup>
+                            <optgroup label="Pool">
+                              <option value="overhead" selected={sel === "overhead"}>Shared Overhead</option>
+                            </optgroup>
+                            <optgroup label="Staff — follows their share %">
+                              {projects.filter((p) => p.id.startsWith("staff:")).map((p) => <option value={p.id} selected={sel === p.id}>{p.label.replace(/^Staff: /, "")}</option>)}
+                            </optgroup>
                           </select>
                         </td>
                         <td style="padding:3px 14px 3px 0;text-align:right">
