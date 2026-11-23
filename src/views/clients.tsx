@@ -61,6 +61,8 @@ export type ClientsSummaryPageProps = {
   monthlyNet: { month: string; byClient: Record<string, number> }[] | null;
   lastSyncLabel: string | null;
   closedBadge?: string | null;
+  /** The Xero P&L (accrual) for the same window — the tie-out strip under the table. */
+  xeroCheck: { incomeC: number; costC: number; monthsCovered: number } | null;
 };
 
 const budgetVariance = (c: { netC: number; budgetRevenueC: number | null; budgetCostC: number | null }): number | null =>
@@ -79,6 +81,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
   monthlyNet,
   lastSyncLabel,
   closedBadge,
+  xeroCheck,
 }) => {
   const base = `/app/clients?p=${periodKey}`;
   return (
@@ -272,6 +275,60 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                 </table>
               </div>
             )}
+
+            {/* Xero tie-out: proves every invoice/bill is catered for in the window. */}
+            <div class="card section-block" style="max-width:720px">
+              <h3 style="margin:0 0 2px">Xero P&amp;L check — {periodLabel}</h3>
+              <p class="muted" style="font-size:12px;margin:0 0 10px">
+                The module's totals against the Xero profit &amp; loss for the same period.{" "}
+                <Info text="Excluded = items the module deliberately keeps out of client reporting (balance-sheet movements, interest, tax, other income). Δ is what remains: journals outside invoices/bills/spend, payroll estimates vs actual salary timing, and in-progress month movement." />
+              </p>
+              {xeroCheck == null ? (
+                <p class="muted" style="font-size:13px">No Xero P&amp;L synced for this window yet — run a sync.</p>
+              ) : (
+                (() => {
+                  const rows = [
+                    { label: "Income", exco: result.totals.revenueC, excl: result.excludedRevenueC, xero: xeroCheck.incomeC },
+                    { label: "Expenditure", exco: result.reconciliation.costInC, excl: result.excludedC, xero: xeroCheck.costC },
+                    { label: "Balance (profit)", exco: result.totals.revenueC - result.reconciliation.costInC, excl: result.excludedRevenueC - result.excludedC, xero: xeroCheck.incomeC - xeroCheck.costC },
+                  ];
+                  return (
+                    <table style="border-collapse:collapse;font-size:13px;width:100%">
+                      <thead>
+                        <tr>
+                          {["", "Clients module", "Excluded", "= Total", "Xero P&L", "Δ"].map((h, i) => (
+                            <th style={`text-align:${i === 0 ? "left" : "right"};padding:4px 12px 4px 0;color:var(--muted);font-weight:600`}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r2) => {
+                          const total = r2.exco + r2.excl;
+                          const diff = total - r2.xero;
+                          return (
+                            <tr>
+                              <td style="padding:4px 12px 4px 0;text-align:left">{r2.label}</td>
+                              <td style="padding:4px 12px 4px 0;text-align:right;font-variant-numeric:tabular-nums">{R(r2.exco)}</td>
+                              <td style="padding:4px 12px 4px 0;text-align:right;font-variant-numeric:tabular-nums" class="muted">{r2.excl === 0 ? "—" : R(r2.excl)}</td>
+                              <td style="padding:4px 12px 4px 0;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">{R(total)}</td>
+                              <td style="padding:4px 12px 4px 0;text-align:right;font-variant-numeric:tabular-nums">{R(r2.xero)}</td>
+                              <td style={`padding:4px 0;text-align:right;font-variant-numeric:tabular-nums;${Math.abs(diff) < 100 ? "color:var(--accent-2)" : "color:#f6c453"}`}>
+                                {Math.abs(diff) < 100 ? "✓" : R(diff)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  );
+                })()
+              )}
+              {xeroCheck != null ? (
+                <p class="muted" style="font-size:11px;margin:8px 0 0">
+                  Xero P&amp;L covers {xeroCheck.monthsCovered} month(s) of this window · accrual basis, excl VAT.
+                </p>
+              ) : null}
+            </div>
           </>
         )}
       </div>

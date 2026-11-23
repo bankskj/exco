@@ -2220,6 +2220,25 @@ app.get("/app/clients", async (c) => {
     const bp = await getBillingPeriod(c.env.DB, months[0]);
     if (bp?.status === "closed") closedBadge = "Closed — reading the frozen snapshot";
   }
+  // Xero P&L for the same window (accrual actuals synced into cf_actuals):
+  // the tie-out strip under the table compares it with the module's totals.
+  let xeroCheck: { incomeC: number; costC: number; monthsCovered: number } | null = null;
+  if (computed.length) {
+    const marks = computed.map(() => "?").join(",");
+    const { results: pnlRows } = await c.env.DB
+      .prepare(`SELECT income_accr, staff_accr, dev_accr, other_accr FROM cf_actuals WHERE month IN (${marks})`)
+      .bind(...computed)
+      .all<{ income_accr: number; staff_accr: number; dev_accr: number; other_accr: number }>();
+    if (pnlRows?.length) {
+      let incomeC = 0;
+      let costC = 0;
+      for (const r of pnlRows) {
+        incomeC += Math.round((r.income_accr ?? 0) * 100);
+        costC += Math.round(((r.staff_accr ?? 0) + (r.dev_accr ?? 0) + (r.other_accr ?? 0)) * 100);
+      }
+      xeroCheck = { incomeC, costC, monthsCovered: pnlRows.length };
+    }
+  }
   const lastSync = await getMeta(c.env.DB, "xero_last_sync");
   return c.html(
     <ClientsSummaryPage
@@ -2231,6 +2250,7 @@ app.get("/app/clients", async (c) => {
       monthlyNet={monthlyNet}
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null}
       closedBadge={closedBadge}
+      xeroCheck={xeroCheck}
     />,
   );
 });
