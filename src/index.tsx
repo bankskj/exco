@@ -2778,17 +2778,22 @@ app.get("/app/costs", async (c) => {
         : s.targetKind === "staff"
           ? `Staff: ${staffNameOf.get(s.employeeId ?? "") ?? "?"}`
           : targetLabel.get(s.projectId ?? "") ?? "project";
+  // Mirrors the engine's classification order exactly: excluded, manual
+  // splits, rules, payee match, people-unmatched, treatment defaults.
   const classify = (l: CostLineView): { tab: CostInboxTab; target: string; ruleName: string | null } => {
     if (l.treatment === "excluded") return { tab: "excluded", target: "Excluded (account treatment)", ruleName: null };
-    if (l.employeeId) return { tab: "assigned", target: `Staff: ${l.employeeName ?? "?"} — via share %`, ruleName: null };
     if (l.splits.length) {
       if (l.splits.every((s) => s.targetKind === "excluded")) return { tab: "excluded", target: "Excluded (manual)", ruleName: null };
       const target = l.splits.length === 1 ? splitTargetLabel(l.splits[0]) : `Split ${l.splits.length} ways`;
       return { tab: "assigned", target, ruleName: null };
     }
-    if (l.treatment === "people") return { tab: "unmatched", target: "Unmatched → General Sales", ruleName: null };
     const rule = firstMatchingRule(rules, { supplier: l.supplier, description: l.description, glCode: l.glCode, txnDate: l.txnDate });
-    if (rule) return { tab: "byrule", target: `Rule: ${rule.name}`, ruleName: rule.name };
+    if (rule) {
+      const target = rule.mode === "paye" ? `Rule: ${rule.name} — across staff by payroll PAYE` : `Rule: ${rule.name}`;
+      return { tab: "byrule", target, ruleName: rule.name };
+    }
+    if (l.employeeId) return { tab: "assigned", target: `Staff: ${l.employeeName ?? "?"} — via share %`, ruleName: null };
+    if (l.treatment === "people") return { tab: "unmatched", target: "Unmatched → General Sales", ruleName: null };
     if (l.treatment === "direct") return { tab: "unassigned", target: "Unassigned → General Sales", ruleName: null };
     return { tab: "overhead", target: "Shared Overhead pool", ruleName: null };
   };
