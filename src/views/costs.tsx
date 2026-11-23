@@ -306,7 +306,7 @@ export type CostRuleListRow = {
   supplierMatch: string | null;
   descriptionMatch: string | null;
   glCode: string | null;
-  mode: "percent" | "fixed";
+  mode: "percent" | "fixed" | "paye";
   active: boolean;
   effectiveFrom: string | null;
   effectiveTo: string | null;
@@ -320,7 +320,7 @@ export type CostRuleEditing = {
   supplierMatch: string | null;
   descriptionMatch: string | null;
   glCode: string | null;
-  mode: "percent" | "fixed";
+  mode: "percent" | "fixed" | "paye";
   active: boolean;
   effectiveFrom: string | null;
   effectiveTo: string | null;
@@ -467,6 +467,7 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
                 <select name="mode">
                   <option value="percent" selected={editing.mode === "percent"}>percent</option>
                   <option value="fixed" selected={editing.mode === "fixed"}>fixed</option>
+                  <option value="paye" selected={editing.mode === "paye"}>paye — across staff by payroll PAYE</option>
                 </select>
               </div>
               <div><label>Effective from</label><input type="date" name="effective_from" value={editing.effectiveFrom ?? ""} /></div>
@@ -538,7 +539,8 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
               </table>
               <p class="muted" style="font-size:12px;margin:8px 0 0">
                 Percent mode: percentages must total 100 (or mark one leg as remainder). Fixed mode: rand amounts with
-                exactly one remainder leg.
+                exactly one remainder leg. PAYE mode ignores the split rows — each month's amount spreads across staff
+                in proportion to their payroll PAYE (fallback gross), then follows each person's share %.
               </p>
             </div>
             <div class="toolbar">

@@ -265,6 +265,22 @@ export function computePeriod(input: PeriodInput): PeriodResult {
       txnDate: line.txnDate,
     });
     if (rule) {
+      if (rule.mode === "paye") {
+        // Split across staff by each person's payroll PAYE for the month
+        // (fallback: payroll gross); exact-sum via largest remainder. With no
+        // payroll captured at all, the line stays in the pool.
+        let weights = input.staff.map((m) => Math.max(0, m.payrollPayeC ?? 0));
+        if (!weights.some((w) => w > 0)) weights = input.staff.map((m) => Math.max(0, m.payrollGrossC ?? 0));
+        if (weights.some((w) => w > 0)) {
+          const pieces = largestRemainder(line.amountC, weights);
+          input.staff.forEach((m, i) => {
+            if (pieces[i] !== 0) addToMap(peopleSums, m.employeeId, pieces[i]);
+          });
+        } else {
+          poolC += line.amountC;
+        }
+        continue;
+      }
       for (const p of applyRuleSplits(line.amountC, rule)) {
         if (p.targetKind === "project") addDirect(p.projectId as string, p.amountC, group, line.supplier);
         else if (p.targetKind === "staff" && p.employeeId) addToMap(peopleSums, p.employeeId, p.amountC);

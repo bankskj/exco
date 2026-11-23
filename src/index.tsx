@@ -3022,7 +3022,7 @@ app.get("/app/costs/rules", async (c) => {
       supplier: p.line.supplier,
       description: p.line.description,
       amountC: p.line.amountC,
-      pieces: p.pieces.map((piece) => ({ label: piece.targetKind === "overhead" ? "Shared Overhead" : labelOf(piece.projectId, piece.employeeId), amountC: piece.amountC })),
+      pieces: p.pieces.map((piece) => ({ label: piece.targetKind === "overhead" ? "Shared Overhead" : piece.targetKind === "staff" && !piece.employeeId ? "Across staff by payroll PAYE" : labelOf(piece.projectId, piece.employeeId), amountC: piece.amountC })),
     }));
   }
   return c.html(<CostRulesPage rules={listRows} editing={editing} projects={selectTargets} preview={preview} error={c.req.query("err") ?? null} />);
@@ -3030,7 +3030,7 @@ app.get("/app/costs/rules", async (c) => {
 
 app.post("/app/costs/rule", async (c) => {
   const b = await c.req.parseBody();
-  const mode = b.mode === "fixed" ? ("fixed" as const) : ("percent" as const);
+  const mode = b.mode === "fixed" ? ("fixed" as const) : b.mode === "paye" ? ("paye" as const) : ("percent" as const);
   const splits: CostRule["splits"] = [];
   for (let i = 0; i < 12; i++) {
     const target = String(b[`split_target_${i}`] ?? "");

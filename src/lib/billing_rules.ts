@@ -60,6 +60,10 @@ export function applyPctSplits(
 export function applyRuleSplits(amountC: number, rule: CostRule): SplitPiece[] {
   if (amountC === 0) return [];
 
+  // 'paye' mode is resolved by the engine (it needs the payroll register);
+  // here it is one staff-marker piece so previews can label it.
+  if (rule.mode === "paye") return [{ targetKind: "staff", projectId: null, employeeId: null, amountC }];
+
   if (rule.mode === "percent") {
     const pctSplits = rule.splits
       .filter((s) => s.pct !== null)

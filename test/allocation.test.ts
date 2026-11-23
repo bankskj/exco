@@ -72,8 +72,8 @@ function cost(over: Partial<CostLine> & { id: string; amountC: number }): CostLi
   };
 }
 
-function staffM(employeeId: string, name: string, defaultTarget: "general" | "overhead", payrollGrossC: number | null = null, loadingPct = 0): StaffMember {
-  return { employeeId, name, defaultTarget, loadingPct, payrollGrossC };
+function staffM(employeeId: string, name: string, defaultTarget: "general" | "overhead", payrollGrossC: number | null = null, loadingPct = 0, payrollPayeC: number | null = null): StaffMember {
+  return { employeeId, name, defaultTarget, loadingPct, payrollGrossC, payrollPayeC };
 }
 
 function alloc(employeeId: string, period: string, pct: number, projectId: string | null, targetKind: "project" | "overhead" = "project"): StaffAllocation {
@@ -260,6 +260,29 @@ describe("billing_rules", () => {
     expect(abf.peopleC).toBe(66_000_00);
     const devco = r.clients.find((c) => c.clientId === "cl-devco")!;
     expect(devco.directC).toBe(4_000_00);
+    expect(r.reconciliation.ok).toBe(true);
+  });
+
+  it("paye-mode rule spreads a SARS PAYE payment across staff by payroll PAYE", () => {
+    const input = baseInput();
+    input.staff = [
+      staffM("staff-a", "Staff A", "general", null, 0, 600_000), // PAYE R6 000
+      staffM("staff-b", "Staff B", "general", null, 0, 400_000), // PAYE R4 000
+      staffM("staff-c", "Staff C", "overhead", null, 0, 0),
+    ];
+    input.costLines.push(cost({ id: "paye", glCode: "428", supplier: "SARS", description: "Internet Pmt To Sarseflng 0096615178", amountC: 10_000_000 }));
+    input.categories.push(cat("428", "cost", "people", "People"));
+    input.rules.push({
+      id: "r-paye", name: "SARS PAYE", priority: 1, supplierMatch: null, descriptionMatch: "sarseflng", glCode: "428",
+      mode: "paye", effectiveFrom: null, effectiveTo: null, active: true, splits: [],
+    });
+    const r = computePeriod(input);
+    // R100 000 splits 60/40 by PAYE: Staff A's slice follows 100% ABF, B's 50% Axiomatic.
+    const abf = cl(r, "cl-abf");
+    expect(abf.peopleC).toBe(12_000_000); // 60 000 salary + 60 000 PAYE slice
+    const axio = cl(r, "cl-axiomatic");
+    expect(axio.peopleC).toBe(4_000_000); // 50% of B's (40 000 salary + 40 000 PAYE)
+    expect(r.exceptions.unmatchedStaff).toEqual([]);
     expect(r.reconciliation.ok).toBe(true);
   });
 

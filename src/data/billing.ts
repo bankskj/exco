@@ -271,7 +271,7 @@ export async function loadPeriodInputs(db: D1Database, periods: string[]): Promi
     q(`SELECT project_id, period, revenue_c, cost_c FROM project_budgets WHERE period IN (${marks})`, ...sorted),
     q(`SELECT period, client_id, pct FROM overhead_fixed_shares WHERE period IN (${marks})`, ...sorted),
     q("SELECT id, name, default_target, loading_pct FROM employees ORDER BY sort_order, name"),
-    q(`SELECT employee_id, period, gross FROM payroll_entries WHERE period IN (${marks})`, ...sorted),
+    q(`SELECT employee_id, period, gross, paye FROM payroll_entries WHERE period IN (${marks})`, ...sorted),
   ]);
 
   const clients = clientRows.map(mapClient);
@@ -318,7 +318,11 @@ export async function loadPeriodInputs(db: D1Database, periods: string[]): Promi
   }));
   const sharesBy = byPeriod(shareRows, (s): OverheadFixedShare => ({ clientId: String(s.client_id), pct: Number(s.pct) }));
   const grossBy = new Map<string, number>();
-  for (const p of payrollRows) grossBy.set(`${p.employee_id}|${p.period}`, Math.round(Number(p.gross) * 100));
+  const payeBy = new Map<string, number>();
+  for (const p of payrollRows) {
+    grossBy.set(`${p.employee_id}|${p.period}`, Math.round(Number(p.gross) * 100));
+    payeBy.set(`${p.employee_id}|${p.period}`, Math.round(Number(p.paye ?? 0) * 100));
+  }
 
   for (const period of sorted) {
     out.set(period, {
@@ -336,6 +340,7 @@ export async function loadPeriodInputs(db: D1Database, periods: string[]): Promi
         defaultTarget: r.default_target as StaffMember["defaultTarget"],
         loadingPct: Number(r.loading_pct ?? 0),
         payrollGrossC: grossBy.get(`${r.id}|${period}`) ?? null,
+        payrollPayeC: payeBy.get(`${r.id}|${period}`) ?? null,
       })),
       allocations: allAllocations.filter((a) => a.period <= period),
       costSplits: splitsBy.get(period) ?? [],
@@ -1297,9 +1302,10 @@ export async function saveRule(db: D1Database, rule: CostRule, actor: string): P
   if (rule.mode === "percent") {
     const sum = rule.splits.reduce((s, x) => s + (x.pct ?? 0), 0);
     if (Math.abs(sum - 100) > 0.001) throw new BillingError(`Percent splits must total 100 — got ${sum}`, 422);
-  } else if (!rule.splits.some((s) => s.isRemainder)) {
+  } else if (rule.mode === "fixed" && !rule.splits.some((s) => s.isRemainder)) {
     throw new BillingError("Fixed-mode rules need at least one remainder split", 422);
   }
+  // 'paye' mode needs no splits: the engine spreads by the payroll register.
   const id = rule.id || uuid();
   const before = await db.prepare("SELECT id, name, priority, supplier_match, description_match, gl_code, mode, effective_from, effective_to, active FROM cost_rules WHERE id = ?").bind(id).first<any>();
   await db.batch([

@@ -79,6 +79,8 @@ export type StaffMember = {
   loadingPct: number;
   /** Exco payroll gross for THIS period, in cents, when captured; else null. */
   payrollGrossC: number | null;
+  /** Exco payroll PAYE for THIS period, in cents (drives 'paye'-mode rules). */
+  payrollPayeC: number | null;
 };
 
 /** One allocation row. Engine receives ALL rows with period <= input period
@@ -115,7 +117,9 @@ export type CostRule = {
   supplierMatch: string | null; // case-insensitive contains; all given must match
   descriptionMatch: string | null;
   glCode: string | null; // exact match
-  mode: "percent" | "fixed";
+  /** percent/fixed use the splits; 'paye' splits across staff by each person's
+   * payroll PAYE for the month (fallback: payroll gross; else the pool). */
+  mode: "percent" | "fixed" | "paye";
   effectiveFrom: string | null; // YYYY-MM-DD compared to line txn_date
   effectiveTo: string | null;
   active: boolean;
