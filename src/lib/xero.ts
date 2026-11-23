@@ -522,7 +522,12 @@ export type XeroTxn = {
  * spend-money bank transaction since the window start — unfiltered, so the
  * Actuals view balances. Paged; calls run sequentially (Xero concurrency).
  */
-export async function fetchActualTxns(accessToken: string, tenantId: string, monthsBack = 18): Promise<{ since: string; txns: XeroTxn[] }> {
+export async function fetchActualTxns(
+  accessToken: string,
+  tenantId: string,
+  monthsBack = 18,
+  opts: { salesOnly?: boolean } = {},
+): Promise<{ since: string; txns: XeroTxn[] }> {
   const now = new Date();
   const sinceM = now.getUTCMonth() + 1 - monthsBack;
   const y = sinceM >= 1 ? now.getUTCFullYear() : now.getUTCFullYear() - Math.ceil((1 - sinceM) / 12);
@@ -570,7 +575,10 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
     });
   };
 
-  for (const type of ["ACCREC", "ACCPAY"] as const) {
+  // salesOnly: the daily refresh — sales invoices (and their payments) only,
+  // so invoices raised by repeating templates reach the forecast the next day.
+  const types = opts.salesOnly ? (["ACCREC"] as const) : (["ACCREC", "ACCPAY"] as const);
+  for (const type of types) {
     for (let page = 1; page <= 60; page++) {
       const q = new URLSearchParams({
         where: `Type=="${type}" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
@@ -585,7 +593,7 @@ export async function fetchActualTxns(accessToken: string, tenantId: string, mon
     }
   }
   // Bank feeds are dense (~300 rows/month) — page until the window is done.
-  for (let page = 1; page <= 150; page++) {
+  for (let page = 1; page <= (opts.salesOnly ? 0 : 150); page++) {
     const q = new URLSearchParams({
       where: `Type=="SPEND" AND Date >= DateTime(${y},${String(m).padStart(2, "0")},01)`,
       page: String(page),

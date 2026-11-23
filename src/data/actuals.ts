@@ -24,6 +24,19 @@ export async function replaceXeroTxns(db: D1Database, since: string, txns: XeroT
   }
 }
 
+/** Replace only the synced sales invoices — bills and bank rows are left as the full sync stored them. */
+export async function replaceSalesTxns(db: D1Database, since: string, txns: XeroTxn[]): Promise<void> {
+  const sales = txns.filter((t) => t.kind === "sale");
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO xero_txns (id, kind, txn_date, due_date, paid_on, payments, contact, reference, sub_total, total, amount_due, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+  );
+  const rows = sales.map((t) => stmt.bind(t.id, t.kind, t.date, t.dueDate, t.paidOn, t.payments.length ? JSON.stringify(t.payments) : null, t.contact, t.reference, t.subTotal, t.total, t.amountDue, t.status));
+  // Same chunking as replaceXeroTxns (D1 batch limit safety); the delete
+  // rides in the first batch so the table is never empty between calls.
+  await db.batch([db.prepare("DELETE FROM xero_txns WHERE kind = 'sale' AND txn_date >= ?").bind(since), ...rows.slice(0, 49)]);
+  for (let i = 49; i < rows.length; i += 50) await db.batch(rows.slice(i, i + 50));
+}
+
 export async function listXeroTxns(db: D1Database): Promise<ActualTxn[]> {
   const { results } = await db
     .prepare("SELECT id, kind, txn_date, contact, reference, sub_total, total, amount_due, status FROM xero_txns ORDER BY txn_date DESC, contact")

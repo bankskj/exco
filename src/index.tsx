@@ -48,7 +48,7 @@ import { AdminPage, DataQualityPage } from "./views/admin";
 import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
-import { replaceXeroTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, salesReceivedInMonth } from "./data/actuals";
+import { replaceXeroTxns, replaceSalesTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, salesReceivedInMonth } from "./data/actuals";
 import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, listMonthlyItemTotals, type ImportMeta } from "./data/projects";
 import { parseProjectFinancials, parsePeriod } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
@@ -1442,7 +1442,19 @@ async function storeRepeatingSchedules(env: Bindings, raw: any[]): Promise<numbe
 async function runRepeatingSync(env: Bindings): Promise<string> {
   const { token, tenantId } = await xeroAuth(env);
   const n = await storeRepeatingSchedules(env, await fetchRepeatingRaw(token, tenantId));
-  return `Repeating schedules refreshed: ${n} template(s).`;
+  // Same run: the sales invoices those templates create, and their payments.
+  // Without this, an invoice leaves the Recurring line as soon as it is raised
+  // but only reaches Open invoices at the next full (monthly) sync.
+  try {
+    const { since, txns } = await fetchActualTxns(token, tenantId, 18, { salesOnly: true });
+    await replaceSalesTxns(env.DB, since, txns);
+    await setMeta(env.DB, "xero_sales_refreshed", new Date().toISOString());
+    await setMeta(env.DB, "xero_actuals_error", "");
+    return `Repeating schedules refreshed: ${n} template(s); ${txns.length} sales invoice(s).`;
+  } catch (e) {
+    await setMeta(env.DB, "xero_actuals_error", `Daily sales refresh failed: ${e instanceof Error ? e.message : "unknown"}`);
+    return `Repeating schedules refreshed: ${n} template(s); sales invoices not refreshed.`;
+  }
 }
 
 /** Full Xero sync: repeating bills + rule-driven vendor detection. Used by the button and the monthly cron. */
@@ -2086,7 +2098,8 @@ app.notFound((c) => c.html(<Landing />, 404));
 
 export default {
   fetch: app.fetch,
-  // Monthly cron: full Xero sync. Daily cron: repeating schedules only, so
+  // Monthly cron: full Xero sync. Daily cron: repeating schedules plus sales
+  // invoices and their payments (no bills / bank feed), so
   // changes to recurring invoices in Xero reach the forecast within a day.
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
     if (event.cron === DAILY_REPEATING_CRON) {
