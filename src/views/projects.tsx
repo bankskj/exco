@@ -122,11 +122,18 @@ export const ProjectsPage: FC<{
         {msg ? <div class="callout section-block">{msg}</div> : null}
 
         {scopeError ? (
-          <div class="callout section-block" style="border-left-color:#f6c453">
-            <strong>Projects access not granted yet.</strong> The Xero connection predates the Projects scope —
-            go to <a href="/app/admin">Admin</a>, click <strong>Disconnect</strong>, then <strong>Connect Xero</strong>{" "}
-            again (the consent screen will now include Projects), and run a sync. Xero said: {scopeError}
-          </div>
+          /403|401|scope|Forbidden|Unauthori[sz]ed/i.test(scopeError) ? (
+            <div class="callout section-block" style="border-left-color:#f6c453">
+              <strong>Projects access not granted yet.</strong> The Xero connection predates the Projects scope —
+              go to <a href="/app/admin">Admin</a>, click <strong>Disconnect</strong>, then <strong>Connect Xero</strong>{" "}
+              again (the consent screen will now include Projects), and run a sync. Xero said: {scopeError}
+            </div>
+          ) : (
+            <div class="callout section-block" style="border-left-color:var(--danger)">
+              <strong>The last projects sync failed</strong> — the figures below are from the previous successful sync
+              and may be stale. Run <strong>Sync now</strong> (Overview) again; if it keeps failing: {scopeError}
+            </div>
+          )
         ) : null}
 
         {projects.length === 0 && !scopeError ? (

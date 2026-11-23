@@ -3,27 +3,28 @@ import type { XeroProject, XeroProjectTask } from "../lib/xero";
 export type ProjectSnapshot = { project_id: string; month: string; charge: number; invoiced: number };
 
 export async function replaceProjects(db: D1Database, projects: XeroProject[]): Promise<void> {
-  await db.prepare("DELETE FROM xero_projects").run();
+  // Deduplicate defensively (paging overlap) and run delete + inserts as ONE
+  // batch: a single transaction, so overlapping syncs can never collide into
+  // a UNIQUE-constraint failure or leave a half-replaced table.
+  const unique = [...new Map(projects.map((p) => [p.id, p])).values()];
   const stmt = db.prepare(
-    "INSERT INTO xero_projects (id, name, status, currency, estimate, minutes_logged, task_amount, expense_amount, invoiced, to_be_invoiced, deposit, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    "INSERT OR REPLACE INTO xero_projects (id, name, status, currency, estimate, minutes_logged, task_amount, expense_amount, invoiced, to_be_invoiced, deposit, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
   );
-  for (let i = 0; i < projects.length; i += 40) {
-    const chunk = projects.slice(i, i + 40).map((p) =>
-      stmt.bind(p.id, p.name, p.status, p.currency, p.estimate, p.minutes_logged, p.task_amount, p.expense_amount, p.invoiced, p.to_be_invoiced, p.deposit),
-    );
-    if (chunk.length) await db.batch(chunk);
-  }
+  await db.batch([
+    db.prepare("DELETE FROM xero_projects"),
+    ...unique.map((p) => stmt.bind(p.id, p.name, p.status, p.currency, p.estimate, p.minutes_logged, p.task_amount, p.expense_amount, p.invoiced, p.to_be_invoiced, p.deposit)),
+  ]);
 }
 
 export async function replaceProjectTasks(db: D1Database, tasks: XeroProjectTask[]): Promise<void> {
-  await db.prepare("DELETE FROM xero_project_tasks").run();
+  const unique = [...new Map(tasks.map((t) => [t.id, t])).values()];
   const stmt = db.prepare(
-    "INSERT INTO xero_project_tasks (id, project_id, name, charge_type, rate, minutes, amount, amount_invoiced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO xero_project_tasks (id, project_id, name, charge_type, rate, minutes, amount, amount_invoiced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
-  for (let i = 0; i < tasks.length; i += 40) {
-    const chunk = tasks.slice(i, i + 40).map((t) => stmt.bind(t.id, t.project_id, t.name, t.charge_type, t.rate, t.minutes, t.amount, t.amount_invoiced));
-    if (chunk.length) await db.batch(chunk);
-  }
+  await db.batch([
+    db.prepare("DELETE FROM xero_project_tasks"),
+    ...unique.map((t) => stmt.bind(t.id, t.project_id, t.name, t.charge_type, t.rate, t.minutes, t.amount, t.amount_invoiced)),
+  ]);
 }
 
 /** Record this month's cumulative totals — deltas between months build the monthly view. */
