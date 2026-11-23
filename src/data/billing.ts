@@ -240,22 +240,42 @@ const mapRule = (r: any, splits: any[]): CostRule => ({
 
 /** Everything the allocation engine needs for one period. */
 export async function loadPeriodInput(db: D1Database, period: string): Promise<PeriodInput> {
+  return (await loadPeriodInputs(db, [period])).get(period)!;
+}
+
+/**
+ * Batched engine input for a window of months: each table is read ONCE with
+ * `period IN (...)` and sliced per month, so a 12-month tracker costs the same
+ * ~11 D1 round-trips as a single month instead of 11 x 12.
+ */
+export async function loadPeriodInputs(db: D1Database, periods: string[]): Promise<Map<string, PeriodInput>> {
+  const out = new Map<string, PeriodInput>();
+  if (periods.length === 0) return out;
+  const sorted = [...new Set(periods)].sort();
+  const maxPeriod = sorted[sorted.length - 1];
+  const marks = sorted.map(() => "?").join(",");
   const q = async (sql: string, ...binds: unknown[]): Promise<any[]> => ((await db.prepare(sql).bind(...binds).all()).results ?? []) as any[];
 
-  const periodRow = await getBillingPeriod(db, period);
-  const clients = (await q("SELECT id, name, short_name, is_general, sort_order, active FROM clients WHERE active = 1 ORDER BY sort_order, name")).map(mapClient);
-  const projects = (await q("SELECT id, client_id, name, code, is_default, billing_type, contract_value_c, start_period, end_period, status FROM projects ORDER BY name")).map(mapProject);
-  const categories = (await q("SELECT code, name, kind, report_group, treatment, sort_order FROM gl_categories WHERE active = 1 ORDER BY sort_order, code")).map(mapCategory);
-  const revenueLines = (await q("SELECT id, period, txn_date, source, doc_number, doc_type, contact_name, client_id, project_id, gl_code, description, amount_c FROM revenue_lines WHERE period = ? ORDER BY txn_date, id", period)).map(mapRevenueLine);
-  const costLines = (await q("SELECT id, period, txn_date, source, doc_kind, supplier, reference, description, gl_code, employee_id, amount_c FROM cost_lines WHERE period = ? ORDER BY txn_date, id", period)).map(mapCostLine);
-  const costSplits: CostSplit[] = (await q("SELECT s.cost_line_id, s.target_kind, s.project_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period = ?", period)).map((s) => ({
-    costLineId: String(s.cost_line_id),
-    targetKind: s.target_kind as TargetKind,
-    projectId: s.project_id ?? null,
-    pct: Number(s.pct),
-  }));
-  const ruleRows = await q("SELECT id, name, priority, supplier_match, description_match, gl_code, mode, effective_from, effective_to, active FROM cost_rules WHERE active = 1 ORDER BY priority, name");
-  const splitRows = await q("SELECT rule_id, target_kind, project_id, pct, fixed_c, is_remainder FROM cost_rule_splits WHERE rule_id IN (SELECT id FROM cost_rules WHERE active = 1) ORDER BY id");
+  const [periodRows, clientRows, projectRows, categoryRows, revenueRows, costRows, splitRows2, ruleRows, splitRows, allocationRows, budgetRows, shareRows, staffRows, payrollRows] = await Promise.all([
+    q(`SELECT period, overhead_basis FROM billing_periods WHERE period IN (${marks})`, ...sorted),
+    q("SELECT id, name, short_name, is_general, sort_order, active FROM clients WHERE active = 1 ORDER BY sort_order, name"),
+    q("SELECT id, client_id, name, code, is_default, billing_type, contract_value_c, start_period, end_period, status FROM projects ORDER BY name"),
+    q("SELECT code, name, kind, report_group, treatment, sort_order FROM gl_categories WHERE active = 1 ORDER BY sort_order, code"),
+    q(`SELECT id, period, txn_date, source, doc_number, doc_type, contact_name, client_id, project_id, gl_code, description, amount_c FROM revenue_lines WHERE period IN (${marks}) ORDER BY txn_date, id`, ...sorted),
+    q(`SELECT id, period, txn_date, source, doc_kind, supplier, reference, description, gl_code, employee_id, amount_c FROM cost_lines WHERE period IN (${marks}) ORDER BY txn_date, id`, ...sorted),
+    q(`SELECT l.period, s.cost_line_id, s.target_kind, s.project_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period IN (${marks})`, ...sorted),
+    q("SELECT id, name, priority, supplier_match, description_match, gl_code, mode, effective_from, effective_to, active FROM cost_rules WHERE active = 1 ORDER BY priority, name"),
+    q("SELECT rule_id, target_kind, project_id, pct, fixed_c, is_remainder FROM cost_rule_splits WHERE rule_id IN (SELECT id FROM cost_rules WHERE active = 1) ORDER BY id"),
+    q("SELECT employee_id, period, target_kind, project_id, pct FROM staff_allocations WHERE period <= ? ORDER BY period, employee_id", maxPeriod),
+    q(`SELECT project_id, period, revenue_c, cost_c FROM project_budgets WHERE period IN (${marks})`, ...sorted),
+    q(`SELECT period, client_id, pct FROM overhead_fixed_shares WHERE period IN (${marks})`, ...sorted),
+    q("SELECT id, name, default_target, loading_pct FROM employees ORDER BY sort_order, name"),
+    q(`SELECT employee_id, period, gross FROM payroll_entries WHERE period IN (${marks})`, ...sorted),
+  ]);
+
+  const clients = clientRows.map(mapClient);
+  const projects = projectRows.map(mapProject);
+  const categories = categoryRows.map(mapCategory);
   const splitsByRule = new Map<string, any[]>();
   for (const s of splitRows) {
     const list = splitsByRule.get(String(s.rule_id)) ?? [];
@@ -263,49 +283,75 @@ export async function loadPeriodInput(db: D1Database, period: string): Promise<P
     splitsByRule.set(String(s.rule_id), list);
   }
   const rules = ruleRows.map((r) => mapRule(r, splitsByRule.get(String(r.id)) ?? []));
-  const allocations: StaffAllocation[] = (await q("SELECT employee_id, period, target_kind, project_id, pct FROM staff_allocations WHERE period <= ? ORDER BY period, employee_id", period)).map((a) => ({
+  const allAllocations: StaffAllocation[] = allocationRows.map((a) => ({
     employeeId: String(a.employee_id),
     period: String(a.period),
     targetKind: a.target_kind as "project" | "overhead",
     projectId: a.project_id ?? null,
     pct: Number(a.pct),
   }));
-  const budgets: ProjectBudget[] = (await q("SELECT project_id, period, revenue_c, cost_c FROM project_budgets WHERE period = ?", period)).map((b) => ({
+  const basisOf = new Map(periodRows.map((r) => [String(r.period), r.overhead_basis as OverheadBasis]));
+  const byPeriod = <T>(rows: any[], map: (r: any) => T): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = m.get(String(r.period)) ?? [];
+      list.push(map(r));
+      m.set(String(r.period), list);
+    }
+    return m;
+  };
+  const revenueBy = byPeriod(revenueRows, mapRevenueLine);
+  const costBy = byPeriod(costRows, mapCostLine);
+  const splitsBy = byPeriod(splitRows2, (s): CostSplit => ({
+    costLineId: String(s.cost_line_id),
+    targetKind: s.target_kind as TargetKind,
+    projectId: s.project_id ?? null,
+    pct: Number(s.pct),
+  }));
+  const budgetsBy = byPeriod(budgetRows, (b): ProjectBudget => ({
     projectId: String(b.project_id),
     period: String(b.period),
     revenueC: Number(b.revenue_c),
     costC: Number(b.cost_c),
   }));
-  const fixedShares: OverheadFixedShare[] = (await q("SELECT client_id, pct FROM overhead_fixed_shares WHERE period = ?", period)).map((s) => ({
-    clientId: String(s.client_id),
-    pct: Number(s.pct),
-  }));
-  const staff: StaffMember[] = (await q(
-    "SELECT e.id, e.name, e.default_target, e.loading_pct, p.gross FROM employees e LEFT JOIN payroll_entries p ON p.employee_id = e.id AND p.period = ? ORDER BY e.sort_order, e.name",
-    period,
-  )).map((r) => ({
-    employeeId: String(r.id),
-    name: String(r.name),
-    defaultTarget: r.default_target as StaffMember["defaultTarget"],
-    loadingPct: Number(r.loading_pct ?? 0),
-    payrollGrossC: r.gross == null ? null : Math.round(Number(r.gross) * 100),
-  }));
+  const sharesBy = byPeriod(shareRows, (s): OverheadFixedShare => ({ clientId: String(s.client_id), pct: Number(s.pct) }));
+  const grossBy = new Map<string, number>();
+  for (const p of payrollRows) grossBy.set(`${p.employee_id}|${p.period}`, Math.round(Number(p.gross) * 100));
 
-  return {
-    period,
-    overheadBasis: periodRow?.overheadBasis ?? "revenue",
-    fixedShares,
-    clients,
-    projects,
-    categories,
-    revenueLines,
-    costLines,
-    staff,
-    allocations,
-    costSplits,
-    rules,
-    budgets,
-  };
+  for (const period of sorted) {
+    out.set(period, {
+      period,
+      overheadBasis: basisOf.get(period) ?? "revenue",
+      fixedShares: sharesBy.get(period) ?? [],
+      clients,
+      projects,
+      categories,
+      revenueLines: revenueBy.get(period) ?? [],
+      costLines: costBy.get(period) ?? [],
+      staff: staffRows.map((r) => ({
+        employeeId: String(r.id),
+        name: String(r.name),
+        defaultTarget: r.default_target as StaffMember["defaultTarget"],
+        loadingPct: Number(r.loading_pct ?? 0),
+        payrollGrossC: grossBy.get(`${r.id}|${period}`) ?? null,
+      })),
+      allocations: allAllocations.filter((a) => a.period <= period),
+      costSplits: splitsBy.get(period) ?? [],
+      rules,
+      budgets: budgetsBy.get(period) ?? [],
+    });
+  }
+  return out;
+}
+
+/** Frozen snapshots for a window of closed months, one query. */
+export async function getSnapshots(db: D1Database, periods: string[]): Promise<Map<string, PeriodResult>> {
+  const out = new Map<string, PeriodResult>();
+  if (periods.length === 0) return out;
+  const marks = periods.map(() => "?").join(",");
+  const { results } = await db.prepare(`SELECT period, result_json FROM period_snapshots WHERE period IN (${marks})`).bind(...periods).all<{ period: string; result_json: string }>();
+  for (const r of results ?? []) out.set(r.period, JSON.parse(r.result_json) as PeriodResult);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

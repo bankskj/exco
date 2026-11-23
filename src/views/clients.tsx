@@ -322,7 +322,7 @@ const TrackerHead: FC<{ months: string[]; cols: TrackerCol[]; firstLabel: string
       <th style="text-align:left">{firstLabel}</th>
       {cols.map((c) => (
         <th style={c.t !== "m" ? QCOL_STYLE : ""}>
-          {c.t === "m" ? shortLabel(months[c.i]) : c.t === "q" ? `Q${c.i + 1}` : months.length ? fyLabel(fiscalYearOf(months[months.length - 1])) : "FY"}
+          {c.t === "m" ? shortLabel(months[c.i]) : c.t === "q" ? `Q${c.i + 1}` : months.length ? `YTD ${fyLabel(fiscalYearOf(months[months.length - 1]))}` : "YTD"}
         </th>
       ))}
     </tr>

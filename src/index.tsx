@@ -54,8 +54,8 @@ import { computePeriod } from "./lib/allocation";
 import { firstMatchingRule } from "./lib/billing_rules";
 import type { PeriodResult, ClientResult, ProjectResult, CostRule, StaffAllocation, BillingProject, StaffPiece, GroupAmount, SupplierAmount, TargetKind as BillingTargetKind, Treatment as GlTreatment, OverheadBasis } from "./lib/billing_types";
 import {
-  BillingError, getBillingPeriod, listBillingPeriods, setOverheadBasis, closePeriod, reopenPeriod, getSnapshot,
-  loadPeriodInput, syncBillingLedgers, mapContact, deleteContactMapping, addStaffPayee, deleteStaffPayee, listStaffPayees,
+  BillingError, getBillingPeriod, listBillingPeriods, setOverheadBasis, closePeriod, reopenPeriod, getSnapshot, getSnapshots,
+  loadPeriodInput, loadPeriodInputs, syncBillingLedgers, mapContact, deleteContactMapping, addStaffPayee, deleteStaffPayee, listStaffPayees,
   setEmployeeBillingSettings, listClients, createClient, listBillingProjects, createProject, updateProject,
   closeProject, listCategories as listGlCategories, setCategoryTreatment, listContactMappings, setFixedShares,
   saveAllocations, copyAllocationsForward, clearAllocations, listRevenueLinesForPeriods, listCostLinesForPeriods,
@@ -1991,18 +1991,19 @@ function billingWindow(key: BillingPeriodKey): { months: string[]; label: string
   }
 }
 
-/** PeriodResult per month: closed months read their frozen snapshot, open months compute live. */
+/** PeriodResult per month: closed months read their frozen snapshot, open
+ * months compute live. Batched — one set of D1 reads covers the whole window. */
 async function computeBillingMonths(db: D1Database, months: string[]): Promise<Map<string, PeriodResult>> {
   const nowM = nowBillingPeriod();
+  const wanted = months.filter((m) => m >= BILLING_START && m <= nowM);
   const out = new Map<string, PeriodResult>();
-  for (const m of months) {
-    if (m > nowM || m < BILLING_START) continue;
-    const snap = await getSnapshot(db, m);
-    if (snap) {
-      out.set(m, snap);
-      continue;
-    }
-    out.set(m, computePeriod(await loadPeriodInput(db, m)));
+  if (!wanted.length) return out;
+  const snaps = await getSnapshots(db, wanted);
+  const toCompute = wanted.filter((m) => !snaps.has(m));
+  const inputs = toCompute.length ? await loadPeriodInputs(db, toCompute) : new Map();
+  for (const m of wanted) {
+    const snap = snaps.get(m);
+    out.set(m, snap ?? computePeriod(inputs.get(m)!));
   }
   return out;
 }
@@ -2529,13 +2530,13 @@ app.get("/app/clients/:id/projects/:pid", async (c) => {
   const nowM = nowBillingPeriod();
   const fy = fiscalYearOf(nowM);
   const months = rangeInclusive(`${fy - 1}-03`, `${fy}-02`);
-  const resMap = await computeBillingMonths(db, months);
+  // One computation covers the FY columns AND all-time invoiced (history starts Mar 2026).
+  const resMap = await computeBillingMonths(db, rangeInclusive(BILLING_START, nowM));
   const projOf = (m: string): ProjectResult | null =>
     resMap.get(m)?.clients.find((x) => x.clientId === id)?.projects.find((p) => p.projectId === pid) ?? null;
   const perMonth = months.map(projOf);
-  const allTime = await computeBillingMonths(db, rangeInclusive(BILLING_START, nowM));
   let invoicedToDateC = 0;
-  for (const res of allTime.values()) invoicedToDateC += res.clients.find((x) => x.clientId === id)?.projects.find((p) => p.projectId === pid)?.revenueC ?? 0;
+  for (const res of resMap.values()) invoicedToDateC += res.clients.find((x) => x.clientId === id)?.projects.find((p) => p.projectId === pid)?.revenueC ?? 0;
   return c.html(
     <ProjectViewPage
       client={{ id: client.id, name: client.name }}
