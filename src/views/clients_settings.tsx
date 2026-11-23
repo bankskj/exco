@@ -88,11 +88,35 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
           <div>
             <h1 style="margin-top:12px">Clients — settings</h1>
             <p class="muted" style="margin-top:0">
-              Master data behind the client P&amp;L: clients and their projects, contact→client mappings, account
-              treatments, staff defaults, and how the shared overhead pool is recovered.
+              The master data that rarely changes. Set it once; day-to-day work happens on the other pages.
             </p>
           </div>
           <a class="btn btn-sm" style="margin-top:16px" href="/app/clients">← Clients</a>
+        </div>
+
+        <div class="card section-block" style="padding:16px 20px">
+          <div class="row" style="gap:40px;flex-wrap:wrap;align-items:flex-start">
+            <div style="min-width:280px">
+              <strong style="font-size:13px">On this page (one-time setup)</strong>
+              <p style="margin:6px 0 0;font-size:13px;line-height:2">
+                <a href="#clients">1 · Clients &amp; projects</a> — the 12 report rows<br />
+                <a href="#contacts">2 · Contact mappings</a> — Xero contact → client<br />
+                <a href="#accounts">3 · Account treatments</a> — people / direct / overhead / excluded<br />
+                <a href="#staff">4 · Staff</a> — payee aliases, default target, loading %<br />
+                <a href="#overhead">5 · Overhead recovery basis</a>
+              </p>
+            </div>
+            <div style="min-width:280px">
+              <strong style="font-size:13px">Done elsewhere (day to day)</strong>
+              <p style="margin:6px 0 0;font-size:13px;line-height:2" class="muted">
+                Assign, split or exclude cost lines → <a href="/app/costs">Cost inbox</a><br />
+                Recurring supplier splits → <a href="/app/costs/rules">Cost rules</a><br />
+                Map revenue contacts, project overrides → <a href="/app/revenue">Revenue lines</a><br />
+                Staff share % per month → <a href="/app/allocations">Allocations</a><br />
+                Add or remove staff → <a href="/app/payroll">People · Payroll register</a>
+              </p>
+            </div>
+          </div>
         </div>
 
         {error ? (
@@ -103,106 +127,108 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         {saved ? <p style="margin:14px 0 0"><span class="badge income">✓ Saved</span></p> : null}
 
         {/* 1 — Clients & projects ------------------------------------------- */}
-        <div class="section-block">
-          <h2>Clients &amp; projects</h2>
-          {clients.map((c) => (
-            <div class="card" style="margin-top:14px">
-              <div class="row spread">
-                <strong>
-                  {c.name}
-                  {c.shortName ? <span class="muted" style="font-weight:400"> · {c.shortName}</span> : null}
-                  {c.isGeneral ? <span class="badge manual" style="margin-left:8px">general</span> : null}
-                  {!c.active ? <span class="badge cost" style="margin-left:8px">inactive</span> : null}
-                </strong>
-                <span class="muted" style="font-size:12px">sort {c.sortOrder} · {c.projects.length} project(s)</span>
-              </div>
-              <table style="border-collapse:collapse;font-size:13px;width:100%;margin-top:10px">
-                <thead>
-                  <tr>
-                    <th style="text-align:left;padding:4px 14px 4px 0;color:var(--muted)">Project</th>
-                    <th style="text-align:left;padding:4px 14px 4px 0;color:var(--muted)">Billing</th>
-                    <th style="text-align:right;padding:4px 14px 4px 0;color:var(--muted)">Contract value</th>
-                    <th style="text-align:left;padding:4px 0;color:var(--muted)"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {c.projects.map((p) => {
-                    const fid = `proj-${p.id}`;
-                    return (
-                      <tr style={p.status === "closed" ? "opacity:.5" : ""}>
-                        <td style="padding:4px 14px 4px 0">
-                          <form id={fid} method="post" action="/app/clients/settings/project" style="display:none"></form>
-                          <input type="hidden" name="id" value={p.id} form={fid} />
-                          <input
-                            type="text"
-                            name="name"
-                            value={p.name}
-                            form={fid}
-                            style="width:240px;padding:6px 8px;font-size:13px"
-                          />
-                          {p.isDefault ? <span class="badge recurring" style="margin-left:6px">default</span> : null}
-                          {p.status === "closed" ? <span class="badge actual" style="margin-left:6px">closed</span> : null}
-                        </td>
-                        <td style="padding:4px 14px 4px 0">
-                          <select name="billing_type" form={fid} style="width:auto;padding:6px 8px;font-size:13px">
-                            {BILLING_TYPES.map((bt) => (
-                              <option value={bt} selected={p.billingType === bt}>{bt}</option>
-                            ))}
-                          </select>
-                        </td>
-                        <td style="padding:4px 14px 4px 0;text-align:right">
-                          <input
-                            type="text"
-                            name="contract_value"
-                            inputmode="decimal"
-                            value={p.contractValueC != null ? String(Math.round(p.contractValueC / 100)) : ""}
-                            form={fid}
-                            placeholder="R"
-                            style="width:120px;padding:6px 8px;font-size:13px;text-align:right"
-                          />
-                        </td>
-                        <td style="padding:4px 0">
-                          <div class="row" style="gap:6px">
-                            <button class="btn btn-sm" type="submit" form={fid}>Save</button>
-                            {!p.isDefault && p.status === "open" ? (
-                              <form
-                                method="post"
-                                action="/app/clients/settings/project/close"
-                                style="margin:0"
-                                onsubmit="return confirm('Close this project? Closed projects stop appearing in allocation and assignment pickers.')"
-                              >
-                                <input type="hidden" name="id" value={p.id} />
-                                <button class="btn btn-sm btn-danger" type="submit">Close</button>
-                              </form>
-                            ) : null}
+        <div class="section-block" id="clients">
+          <h2>1 · Clients &amp; projects <span class="badge recurring" style="vertical-align:middle">report rows</span></h2>
+          <p class="muted" style="font-size:13px;margin-top:4px">
+            Each client has one <strong>default project</strong> — the landing spot for all its revenue and cost.
+            Nothing needs configuring here unless you want to <strong>split a client into work streams</strong>{" "}
+            (a second project) or record a contract value that shows on the project page.
+          </p>
+          <div class="tablewrap" style="max-width:860px;margin-top:12px">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th style="text-align:left">Client</th>
+                  <th style="text-align:left">Projects</th>
+                  <th style="text-align:left"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((c) => {
+                  const extras = c.projects.filter((p) => !p.isDefault);
+                  return (
+                    <tr style={!c.active ? "opacity:.5" : ""}>
+                      <td style="text-align:left;vertical-align:top">
+                        <strong>{c.name}</strong>
+                        {c.shortName ? <span class="muted"> · {c.shortName}</span> : null}
+                        {c.isGeneral ? <span class="badge manual" style="margin-left:8px">catch-all</span> : null}
+                      </td>
+                      <td style="text-align:left;vertical-align:top">
+                        <div class="muted" style="font-size:13px">default project{extras.length ? ` + ${extras.length} split(s)` : " only"}</div>
+                        {extras.map((p) => (
+                          <div style="font-size:13px;margin-top:2px">
+                            {p.name} <span class="muted">· {p.billingType}{p.contractValueC != null ? ` · ${formatZAR(Math.round(p.contractValueC / 100))}` : ""}</span>
+                            {p.status === "closed" ? <span class="badge actual" style="margin-left:6px">closed</span> : null}
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <form method="post" action="/app/clients/settings/project" class="row" style="gap:8px;margin-top:10px">
-                <input type="hidden" name="client" value={c.id} />
-                <input type="text" name="name" required placeholder="New project name" style="width:220px;padding:6px 8px;font-size:13px" />
-                <select name="billing_type" style="width:auto;padding:6px 8px;font-size:13px">
-                  {BILLING_TYPES.map((bt) => <option value={bt}>{bt}</option>)}
-                </select>
-                <input type="text" name="contract_value" inputmode="decimal" placeholder="Contract R (optional)" style="width:160px;padding:6px 8px;font-size:13px" />
-                <button class="btn btn-sm" type="submit">+ Add project</button>
-              </form>
-            </div>
-          ))}
+                        ))}
+                      </td>
+                      <td style="text-align:left;vertical-align:top">
+                        <details>
+                          <summary style="cursor:pointer;font-size:13px;color:var(--accent)">Edit / split…</summary>
+                          <div style="margin-top:10px">
+                            {c.projects.map((p) => {
+                              const fid = `proj-${p.id}`;
+                              return (
+                                <div class="row" style="gap:6px;margin-bottom:6px;flex-wrap:wrap">
+                                  <form id={fid} method="post" action="/app/clients/settings/project" style="display:none"></form>
+                                  <input type="hidden" name="id" value={p.id} form={fid} />
+                                  <input type="text" name="name" value={p.name} form={fid} title="Project name" style="width:200px;padding:5px 8px;font-size:12px" />
+                                  <select name="billing_type" form={fid} title="Billing type" style="width:auto;padding:5px 8px;font-size:12px">
+                                    {BILLING_TYPES.map((bt) => <option value={bt} selected={p.billingType === bt}>{bt}</option>)}
+                                  </select>
+                                  <input
+                                    type="text"
+                                    name="contract_value"
+                                    inputmode="decimal"
+                                    value={p.contractValueC != null ? String(Math.round(p.contractValueC / 100)) : ""}
+                                    form={fid}
+                                    placeholder="Contract R"
+                                    title="Contract value (optional, shows on the project page)"
+                                    style="width:110px;padding:5px 8px;font-size:12px;text-align:right"
+                                  />
+                                  {p.isDefault ? <span class="badge recurring">default</span> : null}
+                                  <button class="btn btn-sm" type="submit" form={fid}>Save</button>
+                                  {!p.isDefault && p.status === "open" ? (
+                                    <form
+                                      method="post"
+                                      action="/app/clients/settings/project/close"
+                                      style="margin:0"
+                                      onsubmit="return confirm('Close this project? Closed projects stop appearing in allocation and assignment pickers.')"
+                                    >
+                                      <input type="hidden" name="id" value={p.id} />
+                                      <button class="btn btn-sm btn-danger" type="submit">Close</button>
+                                    </form>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                            <form method="post" action="/app/clients/settings/project" class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+                              <input type="hidden" name="client" value={c.id} />
+                              <input type="text" name="name" required placeholder="New split, e.g. N8 dev" style="width:200px;padding:5px 8px;font-size:12px" />
+                              <select name="billing_type" style="width:auto;padding:5px 8px;font-size:12px">
+                                {BILLING_TYPES.map((bt) => <option value={bt}>{bt}</option>)}
+                              </select>
+                              <button class="btn btn-sm" type="submit">+ Split into new project</button>
+                            </form>
+                          </div>
+                        </details>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <form method="post" action="/app/clients/settings/client" class="row" style="gap:8px;margin-top:14px">
-            <input type="text" name="name" required placeholder="New client name" style="width:240px;padding:6px 8px;font-size:13px" />
+            <input type="text" name="name" required placeholder="New reporting client" style="width:240px;padding:6px 8px;font-size:13px" />
             <input type="text" name="short_name" placeholder="Short name" style="width:140px;padding:6px 8px;font-size:13px" />
             <button class="btn btn-sm btn-primary" type="submit">+ Add client</button>
           </form>
         </div>
 
         {/* 2 — Contact mappings --------------------------------------------- */}
-        <div class="section-block">
-          <h2>Contact mappings</h2>
+        <div class="section-block" id="contacts">
+          <h2>2 · Contact mappings <span class="badge income" style="vertical-align:middle">revenue → client</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             Xero contact → client. Unmapped contacts' revenue lands in General Sales (the{" "}
             <a href="/app/revenue">Revenue lines</a> page lists them).
@@ -244,8 +270,8 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 3 — Categories ---------------------------------------------------- */}
-        <div class="section-block">
-          <h2>Account categories</h2>
+        <div class="section-block" id="accounts">
+          <h2>3 · Account treatments <span class="badge cost" style="vertical-align:middle">cost behaviour</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             How each GL account is treated.{" "}
             <Info text="Revenue accounts are revenue or excluded. Cost accounts are people (staff cost), direct (client-assignable), overhead (shared pool) or excluded (e.g. tax, depreciation)." />
@@ -297,11 +323,16 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 4 — Staff ---------------------------------------------------------- */}
-        <div class="section-block">
-          <h2>Staff</h2>
+        <div class="section-block" id="staff">
+          <h2>4 · Staff — payee aliases &amp; defaults <span class="badge estimate" style="vertical-align:middle">people cost</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
-            Default target takes a person's unallocated remainder; loading % grosses up payroll cost for
-            employer contributions. Payee aliases match Xero payment payees to the staff member.
+            Staff come from the <a href="/app/payroll">Payroll register</a> — add or remove people there. Here you
+            align them to the billing engine: a <strong>payee alias</strong> is the text that identifies the person
+            on a Xero payment (e.g. “UNATHI JAMES ELULA ONLINE”) — without one, their payments sit in the{" "}
+            <a href="/app/costs?tab=unmatched">Unmatched staff</a> queue. <strong>Default target</strong> takes
+            whatever share % doesn't allocate to a client (general = General Sales; overhead = the shared pool —
+            use overhead for admin staff and directors). <strong>Loading %</strong> grosses up payroll-estimate
+            months. The monthly client split itself lives in the <a href="/app/allocations">Allocations grid</a>.
           </p>
           <div class="tablewrap" style="max-width:1000px">
             <table class="grid">
@@ -374,8 +405,8 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 5 — Overhead basis -------------------------------------------------- */}
-        <div class="section-block">
-          <h2>Overhead recovery basis</h2>
+        <div class="section-block" id="overhead">
+          <h2>5 · Overhead recovery basis <span class="badge manual" style="vertical-align:middle">pool recovery</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             How the shared pool is spread across clients from <strong>{label(basisPeriod)}</strong> onward.{" "}
             <Info text="Revenue: in proportion to each client's revenue. Direct cost: in proportion to people + direct cost. Fixed: the percentages below, which must total exactly 100." />
