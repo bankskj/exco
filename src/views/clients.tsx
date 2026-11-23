@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { Layout, AsAt, Info } from "./layout";
+import { Layout, AsAt, Info, ExportPdfButton } from "./layout";
 import type { PeriodResult, ClientResult, ProjectResult } from "../lib/billing_types";
 import { formatZAR } from "../lib/money";
 import { label, shortLabel, fiscalYearOf, fyLabel } from "../lib/period";
@@ -97,6 +97,8 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
             <AsAt lastSync={lastSyncLabel} />
           </div>
           <div class="row" style="gap:8px;margin-top:16px">
+            <ExportPdfButton />
+            <a class="btn btn-sm" href={`/app/clients/export.csv?view=summary&p=${periodKey}`}>⤓ CSV</a>
             <a class="btn btn-sm" href="/app/clients/settings">Settings</a>
             <a class="btn btn-sm" href="/app/clients/close">Month-end close</a>
           </div>
@@ -305,12 +307,12 @@ export type ClientTrackerPageProps = {
 type TrackerCol = { t: "m"; i: number } | { t: "q"; i: number } | { t: "fy" };
 
 const buildCols = (months: string[]): TrackerCol[] => {
-  const cols: TrackerCol[] = [];
+  // YTD leads so the headline is visible without scrolling; months follow.
+  const cols: TrackerCol[] = [{ t: "fy" }];
   months.forEach((_, i) => {
     cols.push({ t: "m", i });
     if (i % 3 === 2) cols.push({ t: "q", i: Math.floor(i / 3) });
   });
-  cols.push({ t: "fy" });
   return cols;
 };
 
@@ -430,14 +432,22 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
         <p style="margin:14px 0 0;font-size:13px">
           <a href="/app/clients">← Clients</a>
         </p>
-        <h1 style="margin-top:4px">
-          {client.name}
-          {client.isGeneral ? <span class="badge manual" style="margin-left:10px;vertical-align:middle">general</span> : null}
-        </h1>
-        <p class="muted" style="margin-top:0">
-          {periodLabel} tracker — click Revenue, People or Direct to break the row down.{" "}
-          <Info text="Quarter and FY columns are subtotals of the months shown. People breaks down by staff member, Direct by report group (and from there by supplier)." />
-        </p>
+        <div class="row spread">
+          <div>
+            <h1 style="margin-top:4px">
+              {client.name}
+              {client.isGeneral ? <span class="badge manual" style="margin-left:10px;vertical-align:middle">general</span> : null}
+            </h1>
+            <p class="muted" style="margin-top:0">
+              {periodLabel} tracker — click Revenue, People or Direct to break the row down.{" "}
+              <Info text="YTD and quarter columns are subtotals of the computed months. People breaks down by staff member, Direct by report group (and from there by supplier)." />
+            </p>
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px">
+            <ExportPdfButton />
+            <a class="btn btn-sm" href={`/app/clients/export.csv?view=client&id=${client.id}`}>⤓ CSV</a>
+          </div>
+        </div>
 
         {projectCount > 1 && projects.length ? (
           <div style="margin:10px 0 2px">
@@ -564,7 +574,7 @@ export type ProjectViewPageProps = {
  * total, no quarter columns), plus contract-value and invoiced-to-date KPIs.
  */
 export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, months, perMonth, fyTotal, periodLabel }) => {
-  const cols: TrackerCol[] = [...months.map((_, i): TrackerCol => ({ t: "m", i })), { t: "fy" }];
+  const cols: TrackerCol[] = [{ t: "fy" }, ...months.map((_, i): TrackerCol => ({ t: "m", i }))];
   const aggOf = (c: TrackerCol): TrackerAggregate | null => (c.t === "m" ? perMonth[c.i] ?? null : c.t === "fy" ? fyTotal : null);
   const row = (name: string, get: (a: TrackerAggregate) => number | null, negRed?: boolean, strong?: boolean) => (
     <tr>
@@ -588,10 +598,15 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
         <p style="margin:14px 0 0;font-size:13px">
           <a href="/app/clients">← Clients</a> · <a href={`/app/clients/${client.id}`}>{client.name}</a>
         </p>
-        <h1 style="margin-top:4px">
-          {project.name} <span class="badge recurring" style="vertical-align:middle">{project.billingType}</span>
-        </h1>
-        <p class="muted" style="margin-top:0">{client.name} · {periodLabel}</p>
+        <div class="row spread">
+          <div>
+            <h1 style="margin-top:4px">
+              {project.name} <span class="badge recurring" style="vertical-align:middle">{project.billingType}</span>
+            </h1>
+            <p class="muted" style="margin-top:0">{client.name} · {periodLabel}</p>
+          </div>
+          <div style="margin-top:10px"><ExportPdfButton /></div>
+        </div>
 
         <div class="kpis section-block">
           <Kpi label="Contract value" value={project.contractValueC == null ? "—" : R(project.contractValueC)} />

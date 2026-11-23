@@ -180,6 +180,23 @@ a.subnav { margin-right: 14px; font-weight: 600; }
 .seg { padding: 7px 18px; border-radius: 7px; font-weight: 600; font-size: 14px; color: var(--muted); }
 .seg:hover { color: var(--text); text-decoration: none; }
 .seg.active { background: var(--accent); color: #fff; }
+
+/* Print / Export PDF: re-skin the dark theme to paper via the CSS variables. */
+@page { size: A4 landscape; margin: 10mm; }
+@media print {
+  :root { --bg: #fff; --panel: #fff; --panel-2: #f1f3f5; --border: #d0d5db; --text: #111; --muted: #555; --shadow: none; }
+  html { color-scheme: light; }
+  body { background: #fff; color: #111; }
+  .topbar, .footer, .noprint, .segmented, .toolbar, .btn, .callout { display: none !important; }
+  .container { max-width: none; padding: 0; }
+  a { color: #111; text-decoration: none; }
+  .card, .kpi { box-shadow: none; }
+  .tablewrap { overflow: visible; border: none; border-radius: 0; }
+  table.grid { font-size: 10px; width: 100%; }
+  table.grid th, table.grid td { padding: 4px 6px; white-space: nowrap; }
+  table.grid th:first-child, table.grid td:first-child, table.grid thead th { position: static; }
+  .neg { color: #b00000 !important; }
+}
 `;
 
 const NAV = [
@@ -228,6 +245,11 @@ export const Layout: FC<
 );
 
 const WIDE_CSS = `.container { max-width: 1320px; }`;
+
+/** Export PDF — prints the current page through the browser's print-to-PDF. */
+export const ExportPdfButton: FC<{ label?: string }> = ({ label }) => (
+  <button class="btn btn-sm noprint" type="button" onclick="window.print()">⤓ {label ?? "Export PDF"}</button>
+);
 
 /**
  * dd/mm/yyyy text field with a native calendar picker: the invisible date
