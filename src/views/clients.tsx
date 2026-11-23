@@ -324,9 +324,20 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                 })()
               )}
               {xeroCheck != null ? (
-                <p class="muted" style="font-size:11px;margin:8px 0 0">
-                  Xero P&amp;L covers {xeroCheck.monthsCovered} month(s) of this window · accrual basis, excl VAT.
-                </p>
+                (() => {
+                  const estC = result.exceptions.estimatedStaff.reduce((s2, e) => s2 + e.amountC, 0);
+                  return (
+                    <p class="muted" style="font-size:11px;margin:8px 0 0">
+                      Xero P&amp;L covers {xeroCheck.monthsCovered} month(s) of this window · accrual basis, excl VAT.
+                      {estC > 0 ? (
+                        <>
+                          {" "}Module expenditure includes <strong>{R(estC)} of payroll estimates</strong> for staff whose
+                          payments have no payee alias yet — the single biggest source of Δ until aliases are seeded.
+                        </>
+                      ) : null}
+                    </p>
+                  );
+                })()
               ) : null}
             </div>
           </>
