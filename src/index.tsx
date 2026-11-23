@@ -2219,8 +2219,11 @@ app.get("/app/clients", async (c) => {
 
 // ---- Settings (registered before /app/clients/:id) --------------------------
 
+const SETTINGS_TABS = ["clients", "contacts", "accounts", "staff", "overhead"] as const;
+
 app.get("/app/clients/settings", async (c) => {
   const db = c.env.DB;
+  const tab = (SETTINGS_TABS as readonly string[]).includes(String(c.req.query("s"))) ? (String(c.req.query("s")) as (typeof SETTINGS_TABS)[number]) : "clients";
   const basisPeriod = isPeriod(String(c.req.query("period"))) ? String(c.req.query("period")) : nowBillingPeriod();
   const [clients, projects, mappings, categories, payees, bp, input] = await Promise.all([
     listClients(db),
@@ -2252,6 +2255,7 @@ app.get("/app/clients/settings", async (c) => {
   }));
   return c.html(
     <ClientsSettingsPage
+      tab={tab}
       clients={settingsClients}
       categories={categories.map((g) => ({ code: g.code, name: g.name, kind: g.kind, reportGroup: g.reportGroup, treatment: g.treatment, active: g.active }))}
       staff={staff}
@@ -2264,52 +2268,52 @@ app.get("/app/clients/settings", async (c) => {
   );
 });
 
-const settingsRedirect = (c: any, err?: string) => c.redirect(`/app/clients/settings?${err ? `err=${encodeURIComponent(err)}` : "saved=1"}`);
-const settingsAction = (fn: (c: any, b: Record<string, any>, actor: string) => Promise<void>) => async (c: any) => {
+const settingsRedirect = (c: any, tab: string, err?: string) => c.redirect(`/app/clients/settings?s=${tab}&${err ? `err=${encodeURIComponent(err)}` : "saved=1"}`);
+const settingsAction = (tab: string, fn: (c: any, b: Record<string, any>, actor: string) => Promise<void>) => async (c: any) => {
   const b = await c.req.parseBody();
   const actor = (await getActor(c)) ?? "";
   try {
     await fn(c, b, actor);
-    return settingsRedirect(c);
+    return settingsRedirect(c, tab);
   } catch (e) {
-    if (e instanceof BillingError) return settingsRedirect(c, e.message);
+    if (e instanceof BillingError) return settingsRedirect(c, tab, e.message);
     throw e;
   }
 };
 
-app.post("/app/clients/settings/client", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/client", settingsAction("clients", async (c, b, actor) => {
   await createClient(c.env.DB, String(b.name ?? "").trim(), String(b.short_name ?? "").trim() || null, actor);
 }));
-app.post("/app/clients/settings/project", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/project", settingsAction("clients", async (c, b, actor) => {
   const contract = String(b.contract_value ?? "").trim();
   const contractC = contract === "" ? null : Math.round(parseMoney(contract) * 100);
   const billingType = (["fixed", "retainer", "time", "recurring"].includes(String(b.billing_type)) ? String(b.billing_type) : "retainer") as BillingProject["billingType"];
   if (b.id) await updateProject(c.env.DB, String(b.id), { name: String(b.name ?? "").trim(), billingType, contractValueC: contractC }, actor);
   else await createProject(c.env.DB, String(b.client ?? ""), String(b.name ?? "").trim(), billingType, contractC, actor);
 }));
-app.post("/app/clients/settings/project/close", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/project/close", settingsAction("clients", async (c, b, actor) => {
   await closeProject(c.env.DB, String(b.id ?? ""), actor);
 }));
-app.post("/app/clients/settings/contact", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/contact", settingsAction("contacts", async (c, b, actor) => {
   await mapContact(c.env.DB, String(b.client ?? ""), String(b.contact_name ?? "").trim(), actor);
 }));
-app.post("/app/clients/settings/contact/delete", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/contact/delete", settingsAction("contacts", async (c, b, actor) => {
   await deleteContactMapping(c.env.DB, String(b.id ?? ""), actor);
 }));
-app.post("/app/clients/settings/category", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/category", settingsAction("accounts", async (c, b, actor) => {
   await setCategoryTreatment(c.env.DB, String(b.code ?? ""), String(b.report_group ?? "").trim(), String(b.treatment) as GlTreatment, actor);
 }));
-app.post("/app/clients/settings/staff", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/staff", settingsAction("staff", async (c, b, actor) => {
   const target = b.default_target === "overhead" ? "overhead" : "general";
   await setEmployeeBillingSettings(c.env.DB, String(b.employee ?? ""), target, parseMoney(String(b.loading_pct ?? "0")) || 0, actor);
 }));
-app.post("/app/clients/settings/payee", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/payee", settingsAction("staff", async (c, b, actor) => {
   await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : "contains", actor);
 }));
-app.post("/app/clients/settings/payee/delete", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/payee/delete", settingsAction("staff", async (c, b, actor) => {
   await deleteStaffPayee(c.env.DB, String(b.id ?? ""), actor);
 }));
-app.post("/app/clients/settings/basis", settingsAction(async (c, b, actor) => {
+app.post("/app/clients/settings/basis", settingsAction("overhead", async (c, b, actor) => {
   const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
   const basis = (["revenue", "direct_cost", "fixed"].includes(String(b.basis)) ? String(b.basis) : "revenue") as OverheadBasis;
   await setOverheadBasis(c.env.DB, period, basis, actor);

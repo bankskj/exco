@@ -44,7 +44,11 @@ export type SettingsStaff = {
   payees: { id: string; matchText: string; matchMode: "exact" | "contains" }[];
 };
 
+export type SettingsTab = "clients" | "contacts" | "accounts" | "staff" | "overhead";
+
 export type ClientsSettingsPageProps = {
+  /** The active tab (?s=). */
+  tab: SettingsTab;
   clients: SettingsClient[];
   categories: SettingsCategory[];
   staff: SettingsStaff[];
@@ -67,6 +71,7 @@ const COST_TREATMENTS: Treatment[] = ["people", "direct", "overhead", "excluded"
  * inputs reference their form by id).
  */
 export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
+  tab,
   clients,
   categories,
   staff,
@@ -99,11 +104,11 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
             <div style="min-width:280px">
               <strong style="font-size:13px">On this page (one-time setup)</strong>
               <p style="margin:6px 0 0;font-size:13px;line-height:2">
-                <a href="#clients">1 · Clients &amp; projects</a> — the 12 report rows<br />
-                <a href="#contacts">2 · Contact mappings</a> — Xero contact → client<br />
-                <a href="#accounts">3 · Account treatments</a> — people / direct / overhead / excluded<br />
-                <a href="#staff">4 · Staff</a> — payee aliases, default target, loading %<br />
-                <a href="#overhead">5 · Overhead recovery basis</a>
+                <a href="?s=clients">1 · Clients &amp; projects</a> — the 12 report rows<br />
+                <a href="?s=contacts">2 · Contact mappings</a> — Xero contact → client<br />
+                <a href="?s=accounts">3 · Account treatments</a> — people / direct / overhead / excluded<br />
+                <a href="?s=staff">4 · Staff</a> — payee aliases, default target, loading %<br />
+                <a href="?s=overhead">5 · Overhead recovery basis</a>
               </p>
             </div>
             <div style="min-width:280px">
@@ -119,6 +124,18 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
           </div>
         </div>
 
+        <div class="segmented section-block" style="flex-wrap:wrap">
+          {([
+            ["clients", "1 · Clients & projects"],
+            ["contacts", "2 · Contacts"],
+            ["accounts", "3 · Accounts"],
+            ["staff", "4 · Staff"],
+            ["overhead", "5 · Overhead"],
+          ] as [SettingsTab, string][]).map(([key, lbl]) => (
+            <a href={`?s=${key}`} class={tab === key ? "seg active" : "seg"}>{lbl}</a>
+          ))}
+        </div>
+
         {error ? (
           <div class="callout section-block" style="border-left-color:var(--danger)">
             <strong class="neg">Not saved:</strong> {error}
@@ -127,7 +144,7 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         {saved ? <p style="margin:14px 0 0"><span class="badge income">✓ Saved</span></p> : null}
 
         {/* 1 — Clients & projects ------------------------------------------- */}
-        <div class="section-block" id="clients">
+        <div class="section-block" id="clients" style={tab === "clients" ? "" : "display:none"}>
           <h2>1 · Clients &amp; projects <span class="badge recurring" style="vertical-align:middle">report rows</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             Each client has one <strong>default project</strong> — the landing spot for all its revenue and cost.
@@ -227,7 +244,7 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 2 — Contact mappings --------------------------------------------- */}
-        <div class="section-block" id="contacts">
+        <div class="section-block" id="contacts" style={tab === "contacts" ? "" : "display:none"}>
           <h2>2 · Contact mappings <span class="badge income" style="vertical-align:middle">revenue → client</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             Xero contact → client. Unmapped contacts' revenue lands in General Sales (the{" "}
@@ -270,7 +287,7 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 3 — Categories ---------------------------------------------------- */}
-        <div class="section-block" id="accounts">
+        <div class="section-block" id="accounts" style={tab === "accounts" ? "" : "display:none"}>
           <h2>3 · Account treatments <span class="badge cost" style="vertical-align:middle">cost behaviour</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             How each GL account is treated.{" "}
@@ -323,7 +340,7 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 4 — Staff ---------------------------------------------------------- */}
-        <div class="section-block" id="staff">
+        <div class="section-block" id="staff" style={tab === "staff" ? "" : "display:none"}>
           <h2>4 · Staff — payee aliases &amp; defaults <span class="badge estimate" style="vertical-align:middle">people cost</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             Staff come from the <a href="/app/payroll">Payroll register</a> — add or remove people there. Here you
@@ -405,7 +422,7 @@ export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
         </div>
 
         {/* 5 — Overhead basis -------------------------------------------------- */}
-        <div class="section-block" id="overhead">
+        <div class="section-block" id="overhead" style={tab === "overhead" ? "" : "display:none"}>
           <h2>5 · Overhead recovery basis <span class="badge manual" style="vertical-align:middle">pool recovery</span></h2>
           <p class="muted" style="font-size:13px;margin-top:4px">
             How the shared pool is spread across clients from <strong>{label(basisPeriod)}</strong> onward.{" "}

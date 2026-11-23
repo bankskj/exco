@@ -152,7 +152,7 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
                   <tr>
                     <td colspan={columns.length + 4} style="text-align:left" class="muted">
                       No staff with cost in {isDefault ? "the current month" : periodLabel} yet. People appear here once a Xero payment matches one of
-                      their <a href="/app/clients/settings#staff">payee aliases</a> or a payroll amount is captured for
+                      their <a href="/app/clients/settings?s=staff">payee aliases</a> or a payroll amount is captured for
                       the month in <a href="/app/payroll/capture">Payroll</a>.
                     </td>
                   </tr>
