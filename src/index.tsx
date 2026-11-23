@@ -49,6 +49,26 @@ import { replaceXeroTxns, listXeroTxns, vendorSpendTotals } from "./data/actuals
 import { replaceProjects, replaceProjectTasks, upsertProjectSnapshots, listProjects, listTasksForProjects, listSnapshotsForProjects, listAllSnapshots, importProjectItems, listProjectItems, listMonthlyItemTotals, type ImportMeta } from "./data/projects";
 import { parseProjectFinancials, parsePeriod } from "./lib/xlsx";
 import { ProjectsPage } from "./views/projects";
+// --- Client Billing & Cost Allocation (docs/client-billing.md) -------------
+import { computePeriod } from "./lib/allocation";
+import { firstMatchingRule } from "./lib/billing_rules";
+import type { PeriodResult, ClientResult, ProjectResult, CostRule, StaffAllocation, BillingProject, StaffPiece, GroupAmount, SupplierAmount, TargetKind as BillingTargetKind, Treatment as GlTreatment, OverheadBasis } from "./lib/billing_types";
+import {
+  BillingError, getBillingPeriod, listBillingPeriods, setOverheadBasis, closePeriod, reopenPeriod, getSnapshot,
+  loadPeriodInput, syncBillingLedgers, mapContact, deleteContactMapping, addStaffPayee, deleteStaffPayee, listStaffPayees,
+  setEmployeeBillingSettings, listClients, createClient, listBillingProjects, createProject, updateProject,
+  closeProject, listCategories as listGlCategories, setCategoryTreatment, listContactMappings, setFixedShares,
+  saveAllocations, copyAllocationsForward, clearAllocations, listRevenueLinesForPeriods, listCostLinesForPeriods,
+  setRevenueProjectOverride, setCostSplits, importCsv, listRules, saveRule, deleteRule, rulePreview, listAudit,
+  type AllocationInput, type CostLineView,
+} from "./data/billing";
+import { getActor } from "./auth";
+import { ClientsSummaryPage, ClientTrackerPage, ProjectViewPage, type BillingPeriodKey, type TrackerAggregate } from "./views/clients";
+import { AllocationsPage, type AllocationsPageProps } from "./views/allocations";
+import { CostInboxPage, CostRulesPage, type CostInboxTab, type CostInboxLine, type CostRuleListRow, type CostRuleEditing, type CostRulePreviewRow } from "./views/costs";
+import { RevenueLinesPage, type RevenueLineRow } from "./views/revenue_lines";
+import { ClientsSettingsPage, type SettingsClient } from "./views/clients_settings";
+import { ClientClosePage, type CloseCheck } from "./views/clients_close";
 import {
   listEmployees,
   listPayrollEntries,
@@ -80,7 +100,7 @@ import {
 import { getMeta, setMeta } from "./data/db";
 import { computeForecast, type CFEntry } from "./lib/forecast";
 import { parseMoney, formatZAR } from "./lib/money";
-import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, formatDMYTime, parseDateInput, addMonths } from "./lib/period";
+import { isPeriod, label, seq, fiscalYearOf, fyLabel, formatDMY, formatDMYTime, parseDateInput, addMonths, rangeInclusive } from "./lib/period";
 
 /** Parse ?fy= against the FYs present in a timeline. Returns [allFys, selected|null]. */
 function parseFy(timeline: string[], raw: string | undefined): [number[], number | null] {
@@ -1484,6 +1504,14 @@ async function runXeroSync(env: Bindings): Promise<string> {
   } catch (e) {
     await setMeta(env.DB, "xero_actuals_error", e instanceof Error ? e.message : "unknown");
   }
+  // Client billing ledgers — line-level invoices, bills, spend (Clients tab).
+  let billingMsg = "";
+  try {
+    billingMsg = await syncBillingLedgers({ DB: env.DB }, token, tenantId);
+    await setMeta(env.DB, "billing_sync_error", "");
+  } catch (e) {
+    await setMeta(env.DB, "billing_sync_error", e instanceof Error ? e.message : "unknown");
+  }
   // Xero Projects — lifetime totals, tasks and a monthly snapshot.
   try {
     const { projects, rawSample } = await fetchProjects(token, tenantId);
@@ -1510,7 +1538,7 @@ async function runXeroSync(env: Bindings): Promise<string> {
     await setMeta(env.DB, "vat_error", e instanceof Error ? e.message : "unknown");
   }
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
-  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.`;
+  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.${billingMsg ? ` ${billingMsg}.` : ""}`;
   await setMeta(env.DB, "xero_last_sync_result", msg);
   return msg;
 }
@@ -2003,6 +2031,1059 @@ function csvResponse(c: any, filename: string, body: string): Response {
     },
   });
 }
+
+// ===========================================================================
+// Client Billing & Cost Allocation — the Clients tab (docs/client-billing.md)
+// ===========================================================================
+
+const BILLING_START = "2026-03";
+const nowBillingPeriod = () => new Date().toISOString().slice(0, 7);
+
+const billingPeriodKey = (v: string | undefined): BillingPeriodKey =>
+  v === "month" || v === "lastmonth" || v === "quarter" || v === "lastquarter" || v === "fy" || v === "all" ? v : "month";
+
+/** Months (clamped to synced history) + label for a ?p= filter key. */
+function billingWindow(key: BillingPeriodKey): { months: string[]; label: string } {
+  const nowM = nowBillingPeriod();
+  const fyS = `${fiscalYearOf(nowM) - 1}-03`;
+  const qOff = (Number(nowM.slice(0, 4)) - Number(fyS.slice(0, 4))) * 12 + Number(nowM.slice(5, 7)) - Number(fyS.slice(5, 7));
+  const qS = addMonths(fyS, Math.floor(qOff / 3) * 3);
+  const clamp = (s: string) => (s < BILLING_START ? BILLING_START : s);
+  switch (key) {
+    case "month":
+      return { months: [nowM], label: label(nowM) };
+    case "lastmonth": {
+      const m = addMonths(nowM, -1);
+      return { months: [m], label: label(m) };
+    }
+    case "quarter":
+      return { months: rangeInclusive(clamp(qS), nowM), label: `${label(qS)} – ${label(nowM)}` };
+    case "lastquarter": {
+      const s = addMonths(qS, -3);
+      const e = addMonths(qS, -1);
+      return { months: rangeInclusive(clamp(s), e), label: `${label(s)} – ${label(e)}` };
+    }
+    case "fy":
+      return { months: rangeInclusive(clamp(fyS), nowM), label: `${fyLabel(fiscalYearOf(nowM))} to date` };
+    case "all":
+      return { months: rangeInclusive(BILLING_START, nowM), label: "All time (since Mar 2026)" };
+  }
+}
+
+/** PeriodResult per month: closed months read their frozen snapshot, open months compute live. */
+async function computeBillingMonths(db: D1Database, months: string[]): Promise<Map<string, PeriodResult>> {
+  const nowM = nowBillingPeriod();
+  const out = new Map<string, PeriodResult>();
+  for (const m of months) {
+    if (m > nowM || m < BILLING_START) continue;
+    const snap = await getSnapshot(db, m);
+    if (snap) {
+      out.set(m, snap);
+      continue;
+    }
+    out.set(m, computePeriod(await loadPeriodInput(db, m)));
+  }
+  return out;
+}
+
+const mergeGroupAmounts = (lists: GroupAmount[][]): GroupAmount[] => {
+  const m = new Map<string, number>();
+  for (const list of lists) for (const g of list) m.set(g.group, (m.get(g.group) ?? 0) + g.amountC);
+  return [...m].map(([group, amountC]) => ({ group, amountC })).sort((a, b) => a.group.localeCompare(b.group));
+};
+const mergeStaffPieces = (lists: StaffPiece[][]): StaffPiece[] => {
+  const m = new Map<string, StaffPiece>();
+  for (const list of lists)
+    for (const s of list) {
+      const k = `${s.employeeId}|${s.name}`;
+      const prev = m.get(k);
+      m.set(k, prev ? { ...prev, amountC: prev.amountC + s.amountC, estimated: prev.estimated || s.estimated } : { ...s });
+    }
+  return [...m.values()].sort((a, b) => b.amountC - a.amountC);
+};
+const mergeSupplierAmounts = (lists: SupplierAmount[][]): SupplierAmount[] => {
+  const m = new Map<string, number>();
+  for (const list of lists) for (const s of list) m.set(s.supplier, (m.get(s.supplier) ?? 0) + s.amountC);
+  return [...m].map(([supplier, amountC]) => ({ supplier, amountC })).sort((a, b) => b.amountC - a.amountC);
+};
+const addBudget = (a: number | null, b: number | null): number | null => (a === null && b === null ? null : (a ?? 0) + (b ?? 0));
+const pctOf = (num: number, den: number): number | null => (den !== 0 ? (num / den) * 100 : null);
+
+function mergeProjectResults(parts: ProjectResult[]): ProjectResult {
+  const f = parts[0];
+  const sum = (sel: (p: ProjectResult) => number) => parts.reduce((s, p) => s + sel(p), 0);
+  const revenueC = sum((p) => p.revenueC);
+  const peopleC = sum((p) => p.peopleC);
+  const directC = sum((p) => p.directC);
+  const overheadC = sum((p) => p.overheadC);
+  return {
+    projectId: f.projectId,
+    name: f.name,
+    isDefault: f.isDefault,
+    revenueC,
+    revenueByGroup: mergeGroupAmounts(parts.map((p) => p.revenueByGroup)),
+    peopleC,
+    peopleByStaff: mergeStaffPieces(parts.map((p) => p.peopleByStaff)),
+    directC,
+    directByGroup: mergeGroupAmounts(parts.map((p) => p.directByGroup)),
+    directBySupplier: mergeSupplierAmounts(parts.map((p) => p.directBySupplier)),
+    contributionC: revenueC - peopleC - directC,
+    overheadC,
+    netC: revenueC - peopleC - directC - overheadC,
+    budgetRevenueC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetRevenueC), null),
+    budgetCostC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetCostC), null),
+  };
+}
+
+function mergeClientResults(parts: ClientResult[]): ClientResult {
+  const f = parts[0];
+  const sum = (sel: (p: ClientResult) => number) => parts.reduce((s, p) => s + sel(p), 0);
+  const revenueC = sum((p) => p.revenueC);
+  const peopleC = sum((p) => p.peopleC);
+  const directC = sum((p) => p.directC);
+  const overheadC = sum((p) => p.overheadC);
+  const contributionC = revenueC - peopleC - directC;
+  const byProject = new Map<string, ProjectResult[]>();
+  for (const part of parts)
+    for (const pr of part.projects) {
+      const list = byProject.get(pr.projectId) ?? [];
+      list.push(pr);
+      byProject.set(pr.projectId, list);
+    }
+  return {
+    clientId: f.clientId,
+    name: f.name,
+    shortName: f.shortName,
+    isGeneral: f.isGeneral,
+    revenueC,
+    revenueByGroup: mergeGroupAmounts(parts.map((p) => p.revenueByGroup)),
+    peopleC,
+    peopleByStaff: mergeStaffPieces(parts.map((p) => p.peopleByStaff)),
+    directC,
+    directByGroup: mergeGroupAmounts(parts.map((p) => p.directByGroup)),
+    directBySupplier: mergeSupplierAmounts(parts.map((p) => p.directBySupplier)),
+    contributionC,
+    contributionPct: pctOf(contributionC, revenueC),
+    overheadC,
+    netC: contributionC - overheadC,
+    netPct: pctOf(contributionC - overheadC, revenueC),
+    budgetRevenueC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetRevenueC), null),
+    budgetCostC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetCostC), null),
+    projects: [...byProject.values()].map(mergeProjectResults),
+  };
+}
+
+/** Sum monthly PeriodResults into one result for a multi-month window. */
+function mergeBillingResults(parts: PeriodResult[]): PeriodResult | null {
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  const clientOrder: string[] = [];
+  const byClient = new Map<string, ClientResult[]>();
+  for (const part of parts)
+    for (const cl of part.clients) {
+      if (!byClient.has(cl.clientId)) clientOrder.push(cl.clientId);
+      const list = byClient.get(cl.clientId) ?? [];
+      list.push(cl);
+      byClient.set(cl.clientId, list);
+    }
+  const sum = (sel: (p: PeriodResult) => number) => parts.reduce((s, p) => s + sel(p), 0);
+  const unmapped = new Map<string, { contactName: string; amountC: number; lineCount: number }>();
+  for (const part of parts)
+    for (const u of part.exceptions.unmappedContacts) {
+      const prev = unmapped.get(u.contactName);
+      unmapped.set(u.contactName, prev ? { contactName: u.contactName, amountC: prev.amountC + u.amountC, lineCount: prev.lineCount + u.lineCount } : { ...u });
+    }
+  return {
+    period: `${parts[0].period}..${parts[parts.length - 1].period}`,
+    overheadBasis: parts[0].overheadBasis,
+    clients: clientOrder.map((id) => mergeClientResults(byClient.get(id)!)),
+    poolC: sum((p) => p.poolC),
+    excludedC: sum((p) => p.excludedC),
+    excludedRevenueC: sum((p) => p.excludedRevenueC),
+    totals: {
+      revenueC: sum((p) => p.totals.revenueC),
+      peopleC: sum((p) => p.totals.peopleC),
+      directC: sum((p) => p.totals.directC),
+      contributionC: sum((p) => p.totals.contributionC),
+      overheadC: sum((p) => p.totals.overheadC),
+      netC: sum((p) => p.totals.netC),
+    },
+    reconciliation: {
+      costInC: sum((p) => p.reconciliation.costInC),
+      costAllocatedC: sum((p) => p.reconciliation.costAllocatedC),
+      revenueInC: sum((p) => p.reconciliation.revenueInC),
+      revenueAllocatedC: sum((p) => p.reconciliation.revenueAllocatedC),
+      ok: parts.every((p) => p.reconciliation.ok),
+    },
+    exceptions: {
+      unmappedContacts: [...unmapped.values()].sort((a, b) => b.amountC - a.amountC),
+      unassignedDirect: parts.flatMap((p) => p.exceptions.unassignedDirect),
+      unmatchedStaff: parts.flatMap((p) => p.exceptions.unmatchedStaff),
+      estimatedStaff: parts.flatMap((p) => p.exceptions.estimatedStaff),
+      overAllocated: parts.flatMap((p) => p.exceptions.overAllocated),
+    },
+  };
+}
+
+const EMPTY_AGG: TrackerAggregate = { revenueC: 0, peopleC: 0, directC: 0, contributionC: 0, overheadC: 0, netC: 0, budgetRevenueC: null, budgetCostC: null };
+const aggAdd = (a: TrackerAggregate, r: { revenueC: number; peopleC: number; directC: number; contributionC: number; overheadC: number; netC: number; budgetRevenueC: number | null; budgetCostC: number | null } | null): TrackerAggregate =>
+  r
+    ? {
+        revenueC: a.revenueC + r.revenueC,
+        peopleC: a.peopleC + r.peopleC,
+        directC: a.directC + r.directC,
+        contributionC: a.contributionC + r.contributionC,
+        overheadC: a.overheadC + r.overheadC,
+        netC: a.netC + r.netC,
+        budgetRevenueC: addBudget(a.budgetRevenueC, r.budgetRevenueC),
+        budgetCostC: addBudget(a.budgetCostC, r.budgetCostC),
+      }
+    : a;
+
+/** Assignable targets for selects: the 12 default projects (client order), then extra open projects. */
+async function billingTargetOptions(db: D1Database): Promise<{ id: string; label: string; clientId: string }[]> {
+  const [clients, projects] = await Promise.all([listClients(db), listBillingProjects(db)]);
+  const active = clients.filter((c) => c.active);
+  const out: { id: string; label: string; clientId: string }[] = [];
+  for (const cl of active) {
+    const def = projects.find((p) => p.clientId === cl.id && p.isDefault);
+    if (def) out.push({ id: def.id, label: cl.shortName ?? cl.name, clientId: cl.id });
+  }
+  for (const p of projects.filter((p) => !p.isDefault && p.status === "open")) {
+    const cl = active.find((c) => c.id === p.clientId);
+    if (cl) out.push({ id: p.id, label: `${cl.shortName ?? cl.name} · ${p.name}`, clientId: cl.id });
+  }
+  return out;
+}
+
+const billing409 = (c: any, e: unknown): Response => {
+  if (e instanceof BillingError) return c.text(e.message, e.status as 409);
+  throw e;
+};
+
+// ---- Summary ---------------------------------------------------------------
+
+app.get("/app/clients", async (c) => {
+  const pKey = billingPeriodKey(c.req.query("p"));
+  const view = c.req.query("view") === "grid" ? ("grid" as const) : ("table" as const);
+  const { months, label: periodLabel } = billingWindow(pKey);
+  const resMap = await computeBillingMonths(c.env.DB, months);
+  const computed = [...resMap.keys()];
+  const result = mergeBillingResults(computed.map((m) => resMap.get(m)!));
+  const monthlyNet =
+    view === "grid"
+      ? computed.map((m) => ({ month: m, byClient: Object.fromEntries(resMap.get(m)!.clients.map((cl) => [cl.clientId, cl.netC])) }))
+      : null;
+  let closedBadge: string | null = null;
+  if (months.length === 1) {
+    const bp = await getBillingPeriod(c.env.DB, months[0]);
+    if (bp?.status === "closed") closedBadge = "Closed — reading the frozen snapshot";
+  }
+  const lastSync = await getMeta(c.env.DB, "xero_last_sync");
+  return c.html(
+    <ClientsSummaryPage
+      result={result}
+      periodKey={pKey}
+      periodLabel={periodLabel}
+      months={computed}
+      view={view}
+      monthlyNet={monthlyNet}
+      lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null}
+      closedBadge={closedBadge}
+    />,
+  );
+});
+
+// ---- Settings (registered before /app/clients/:id) --------------------------
+
+app.get("/app/clients/settings", async (c) => {
+  const db = c.env.DB;
+  const basisPeriod = isPeriod(String(c.req.query("period"))) ? String(c.req.query("period")) : nowBillingPeriod();
+  const [clients, projects, mappings, categories, payees, bp, input] = await Promise.all([
+    listClients(db),
+    listBillingProjects(db),
+    listContactMappings(db),
+    listGlCategories(db),
+    listStaffPayees(db),
+    getBillingPeriod(db, basisPeriod),
+    loadPeriodInput(db, basisPeriod),
+  ]);
+  const settingsClients: SettingsClient[] = clients.map((cl) => ({
+    id: cl.id,
+    name: cl.name,
+    shortName: cl.shortName,
+    isGeneral: cl.isGeneral,
+    active: cl.active,
+    sortOrder: cl.sortOrder,
+    projects: projects
+      .filter((p) => p.clientId === cl.id)
+      .map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault, billingType: p.billingType, contractValueC: p.contractValueC, status: p.status })),
+    contacts: mappings.filter((m) => m.clientId === cl.id).map((m) => ({ id: m.id, contactName: m.contactName })),
+  }));
+  const staff = input.staff.map((s) => ({
+    employeeId: s.employeeId,
+    name: s.name,
+    defaultTarget: s.defaultTarget,
+    loadingPct: s.loadingPct,
+    payees: payees.filter((p) => p.employeeId === s.employeeId).map((p) => ({ id: p.id, matchText: p.matchText, matchMode: p.matchMode })),
+  }));
+  return c.html(
+    <ClientsSettingsPage
+      clients={settingsClients}
+      categories={categories.map((g) => ({ code: g.code, name: g.name, kind: g.kind, reportGroup: g.reportGroup, treatment: g.treatment, active: g.active }))}
+      staff={staff}
+      basisPeriod={basisPeriod}
+      basis={bp?.overheadBasis ?? "revenue"}
+      fixedShares={input.fixedShares}
+      saved={c.req.query("saved") === "1"}
+      error={c.req.query("err") ?? null}
+    />,
+  );
+});
+
+const settingsRedirect = (c: any, err?: string) => c.redirect(`/app/clients/settings?${err ? `err=${encodeURIComponent(err)}` : "saved=1"}`);
+const settingsAction = (fn: (c: any, b: Record<string, any>, actor: string) => Promise<void>) => async (c: any) => {
+  const b = await c.req.parseBody();
+  const actor = (await getActor(c)) ?? "";
+  try {
+    await fn(c, b, actor);
+    return settingsRedirect(c);
+  } catch (e) {
+    if (e instanceof BillingError) return settingsRedirect(c, e.message);
+    throw e;
+  }
+};
+
+app.post("/app/clients/settings/client", settingsAction(async (c, b, actor) => {
+  await createClient(c.env.DB, String(b.name ?? "").trim(), String(b.short_name ?? "").trim() || null, actor);
+}));
+app.post("/app/clients/settings/project", settingsAction(async (c, b, actor) => {
+  const contract = String(b.contract_value ?? "").trim();
+  const contractC = contract === "" ? null : Math.round(parseMoney(contract) * 100);
+  const billingType = (["fixed", "retainer", "time", "recurring"].includes(String(b.billing_type)) ? String(b.billing_type) : "retainer") as BillingProject["billingType"];
+  if (b.id) await updateProject(c.env.DB, String(b.id), { name: String(b.name ?? "").trim(), billingType, contractValueC: contractC }, actor);
+  else await createProject(c.env.DB, String(b.client ?? ""), String(b.name ?? "").trim(), billingType, contractC, actor);
+}));
+app.post("/app/clients/settings/project/close", settingsAction(async (c, b, actor) => {
+  await closeProject(c.env.DB, String(b.id ?? ""), actor);
+}));
+app.post("/app/clients/settings/contact", settingsAction(async (c, b, actor) => {
+  await mapContact(c.env.DB, String(b.client ?? ""), String(b.contact_name ?? "").trim(), actor);
+}));
+app.post("/app/clients/settings/contact/delete", settingsAction(async (c, b, actor) => {
+  await deleteContactMapping(c.env.DB, String(b.id ?? ""), actor);
+}));
+app.post("/app/clients/settings/category", settingsAction(async (c, b, actor) => {
+  await setCategoryTreatment(c.env.DB, String(b.code ?? ""), String(b.report_group ?? "").trim(), String(b.treatment) as GlTreatment, actor);
+}));
+app.post("/app/clients/settings/staff", settingsAction(async (c, b, actor) => {
+  const target = b.default_target === "overhead" ? "overhead" : "general";
+  await setEmployeeBillingSettings(c.env.DB, String(b.employee ?? ""), target, parseMoney(String(b.loading_pct ?? "0")) || 0, actor);
+}));
+app.post("/app/clients/settings/payee", settingsAction(async (c, b, actor) => {
+  await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : "contains", actor);
+}));
+app.post("/app/clients/settings/payee/delete", settingsAction(async (c, b, actor) => {
+  await deleteStaffPayee(c.env.DB, String(b.id ?? ""), actor);
+}));
+app.post("/app/clients/settings/basis", settingsAction(async (c, b, actor) => {
+  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  const basis = (["revenue", "direct_cost", "fixed"].includes(String(b.basis)) ? String(b.basis) : "revenue") as OverheadBasis;
+  await setOverheadBasis(c.env.DB, period, basis, actor);
+  if (basis === "fixed") {
+    const shares: { clientId: string; pct: number }[] = [];
+    for (const [k, v] of Object.entries(b)) {
+      if (k.startsWith("share::") && String(v).trim() !== "") shares.push({ clientId: k.slice(7), pct: parseMoney(String(v)) });
+    }
+    await setFixedShares(c.env.DB, period, shares, actor);
+  }
+}));
+
+// ---- Month close ------------------------------------------------------------
+
+async function buildCloseChecks(db: D1Database, period: string, result: PeriodResult): Promise<CloseCheck[]> {
+  const r = result.reconciliation;
+  const ex = result.exceptions;
+  const fmtR = (cents: number) => formatZAR(Math.round(cents / 100));
+  const checks: CloseCheck[] = [
+    {
+      label: "Reconciliation holds to the cent",
+      level: "block",
+      pass: r.ok,
+      detail: r.ok ? `cost in ${fmtR(r.costInC)} = allocated ${fmtR(r.costAllocatedC)}` : `cost in ${fmtR(r.costInC)} vs allocated ${fmtR(r.costAllocatedC)}; revenue in ${fmtR(r.revenueInC)} vs allocated ${fmtR(r.revenueAllocatedC)}`,
+      href: null,
+    },
+    {
+      label: "No unmapped revenue contacts",
+      level: "block",
+      pass: ex.unmappedContacts.length === 0,
+      detail: ex.unmappedContacts.length ? ex.unmappedContacts.map((u) => u.contactName).join(", ") : null,
+      href: "/app/revenue?p=month",
+    },
+    {
+      label: "No unmatched staff payments",
+      level: "block",
+      pass: ex.unmatchedStaff.length === 0,
+      detail: ex.unmatchedStaff.length ? `${ex.unmatchedStaff.length} line(s), ${fmtR(ex.unmatchedStaff.reduce((s, u) => s + u.amountC, 0))}` : null,
+      href: "/app/costs?p=month&tab=unmatched",
+    },
+    {
+      label: "No allocation rows over 100%",
+      level: "block",
+      pass: ex.overAllocated.length === 0,
+      detail: ex.overAllocated.length ? ex.overAllocated.map((o) => `${o.name} ${o.totalPct}%`).join(", ") : null,
+      href: `/app/allocations?period=${period}`,
+    },
+    {
+      label: "Unassigned direct lines (they sit in General Sales)",
+      level: "warn",
+      pass: ex.unassignedDirect.length === 0,
+      detail: ex.unassignedDirect.length ? `${ex.unassignedDirect.length} line(s), ${fmtR(ex.unassignedDirect.reduce((s, u) => s + u.amountC, 0))}` : null,
+      href: "/app/costs?p=month&tab=unassigned",
+    },
+    {
+      label: "Staff on payroll estimates",
+      level: "warn",
+      pass: ex.estimatedStaff.length === 0,
+      detail: ex.estimatedStaff.length ? ex.estimatedStaff.map((s) => s.name).join(", ") : null,
+      href: null,
+    },
+  ];
+  // Xero P&L tie-out (accrual actuals already synced into cf_actuals).
+  const pnl = await db
+    .prepare("SELECT income_accr, staff_accr, dev_accr, other_accr FROM cf_actuals WHERE month = ?")
+    .bind(period)
+    .first<{ income_accr: number; staff_accr: number; dev_accr: number; other_accr: number }>();
+  if (pnl) {
+    const xeroIncome = Math.round((pnl.income_accr ?? 0) * 100);
+    const xeroCost = Math.round(((pnl.staff_accr ?? 0) + (pnl.dev_accr ?? 0) + (pnl.other_accr ?? 0)) * 100);
+    const revDiff = result.totals.revenueC - xeroIncome;
+    const costDiff = result.reconciliation.costInC - xeroCost;
+    const pass = Math.abs(revDiff) < 100 && Math.abs(costDiff) < 100;
+    checks.push({
+      label: "Xero P&L tie-out",
+      level: "warn",
+      pass,
+      detail: pass ? null : `revenue off by ${fmtR(revDiff)}, cost off by ${fmtR(costDiff)} vs the Xero P&L — a sync gap or a journal outside bills/spend/invoices`,
+      href: "/app/finance/pnl",
+    });
+  } else {
+    checks.push({ label: "Xero P&L tie-out", level: "warn", pass: false, detail: "no synced P&L actuals for this month yet — run a sync", href: null });
+  }
+  return checks;
+}
+
+app.get("/app/clients/close", async (c) => {
+  const db = c.env.DB;
+  const q = String(c.req.query("period") ?? "");
+  const period = isPeriod(q) ? q : addMonths(nowBillingPeriod(), -1);
+  const periods = await listBillingPeriods(db);
+  const bp = periods.find((p) => p.period === period) ?? null;
+  const status = bp?.status === "closed" ? ("closed" as const) : ("open" as const);
+  const result = status === "closed" ? (await getSnapshot(db, period))! : computePeriod(await loadPeriodInput(db, period));
+  const checks = await buildCloseChecks(db, period, result);
+  const [postClose, audit] = await Promise.all([getMeta(db, "billing_postclose_warning"), listAudit(db, 50)]);
+  return c.html(
+    <ClientClosePage
+      period={period}
+      months={periods.filter((p) => p.period <= nowBillingPeriod()).map((p) => ({ period: p.period, status: p.status as "open" | "closed" }))}
+      status={status}
+      closedAt={bp?.closedAt ?? null}
+      checks={checks}
+      canClose={status === "open" && checks.filter((ch) => ch.level === "block").every((ch) => ch.pass)}
+      postCloseWarning={postClose || null}
+      audit={audit.map((a) => ({ at: a.at, actor: a.actor, entity: a.entity, action: a.action, entityId: a.entityId }))}
+      error={c.req.query("err") ?? null}
+    />,
+  );
+});
+
+app.post("/app/clients/close/run", async (c) => {
+  const b = await c.req.parseBody();
+  const period = isPeriod(String(b.period)) ? String(b.period) : "";
+  if (!period) return c.redirect("/app/clients/close");
+  const db = c.env.DB;
+  const back = (err: string) => c.redirect(`/app/clients/close?period=${period}&err=${encodeURIComponent(err)}`);
+  const bp = await getBillingPeriod(db, period);
+  if (bp?.status === "closed") return c.text("Period is already closed", 409);
+  const result = computePeriod(await loadPeriodInput(db, period));
+  const checks = await buildCloseChecks(db, period, result);
+  if (!checks.filter((ch) => ch.level === "block").every((ch) => ch.pass)) return back("Blocking checks failed — fix them first");
+  if (checks.some((ch) => ch.level === "warn" && !ch.pass) && b.ack !== "1") return back("Tick the acknowledgement to close with warnings");
+  try {
+    await closePeriod(db, period, JSON.stringify(result), (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/clients/close?period=${period}`);
+});
+
+app.post("/app/clients/close/reopen", async (c) => {
+  const b = await c.req.parseBody();
+  const period = isPeriod(String(b.period)) ? String(b.period) : "";
+  if (period) await reopenPeriod(c.env.DB, period, (await getActor(c)) ?? "");
+  return c.redirect(`/app/clients/close?period=${period}`);
+});
+
+// ---- CSV exports ------------------------------------------------------------
+
+app.get("/app/clients/export.csv", async (c) => {
+  const db = c.env.DB;
+  const view = String(c.req.query("view") ?? "summary");
+  const pKey = billingPeriodKey(c.req.query("p"));
+  const { months, label: pl } = billingWindow(pKey);
+  const esc = (v: unknown) => {
+    const s = String(v ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const R2 = (cents: number) => (cents / 100).toFixed(2);
+  if (view === "costs") {
+    const lines = await listCostLinesForPeriods(db, months);
+    const rows = lines.map((l) => [l.txnDate, esc(l.supplier), esc(l.description), l.glCode ?? "", esc(l.reportGroup ?? ""), l.treatment ?? "", esc(l.employeeName ?? ""), R2(l.amountC)].join(","));
+    return csvResponse(c, `costs-${pKey}.csv`, ["date,supplier,description,account,group,treatment,staff,amount_excl", ...rows].join("\n"));
+  }
+  if (view === "allocations") {
+    const period = isPeriod(String(c.req.query("period"))) ? String(c.req.query("period")) : nowBillingPeriod();
+    const input = await loadPeriodInput(db, period);
+    const names = new Map(input.staff.map((s) => [s.employeeId, s.name]));
+    const projNames = new Map(input.projects.map((p) => [p.id, p.name]));
+    const rows = input.allocations.filter((a) => a.period === period).map((a) => [a.period, esc(names.get(a.employeeId) ?? a.employeeId), a.targetKind, esc(a.projectId ? projNames.get(a.projectId) ?? a.projectId : "Shared Overhead"), a.pct].join(","));
+    return csvResponse(c, `allocations-${period}.csv`, ["period,staff,target_kind,target,pct", ...rows].join("\n"));
+  }
+  const resMap = await computeBillingMonths(db, months);
+  if (view === "client") {
+    const id = String(c.req.query("id") ?? "");
+    const rows: string[] = [];
+    for (const [m, res] of resMap) {
+      const cl = res.clients.find((x) => x.clientId === id);
+      if (cl) rows.push([m, esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), R2(cl.overheadC), R2(cl.netC)].join(","));
+    }
+    return csvResponse(c, `client-${id}.csv`, ["month,client,revenue,people,direct,contribution,overhead,net", ...rows].join("\n"));
+  }
+  const result = mergeBillingResults([...resMap.values()]);
+  const rows = (result?.clients ?? []).map((cl) => [esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), cl.contributionPct?.toFixed(1) ?? "", R2(cl.overheadC), R2(cl.netC), cl.netPct?.toFixed(1) ?? ""].join(","));
+  return csvResponse(c, `clients-${pKey}.csv`, [`client,revenue,people,direct,contribution,contribution_pct,overhead,net,net_pct — ${pl}`, ...rows].join("\n"));
+});
+
+// ---- Client tracker + project view -------------------------------------------
+
+app.get("/app/clients/:id", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const clients = await listClients(db);
+  const client = clients.find((x) => x.id === id);
+  if (!client) return c.redirect("/app/clients");
+  const nowM = nowBillingPeriod();
+  const fy = fiscalYearOf(nowM);
+  const months = rangeInclusive(`${fy - 1}-03`, `${fy}-02`);
+  const resMap = await computeBillingMonths(db, months);
+  const perMonth = months.map((m) => resMap.get(m)?.clients.find((x) => x.clientId === id) ?? null);
+  const quarterTotals: TrackerAggregate[] = [0, 1, 2, 3].map((q) =>
+    perMonth.slice(q * 3, q * 3 + 3).reduce(aggAdd, EMPTY_AGG),
+  );
+  const fyTotal = perMonth.reduce(aggAdd, EMPTY_AGG);
+  const projects = (await listBillingProjects(db)).filter((p) => p.clientId === id && p.status === "open");
+  return c.html(
+    <ClientTrackerPage
+      client={{ id: client.id, name: client.name, isGeneral: client.isGeneral }}
+      months={months}
+      perMonth={perMonth}
+      quarterTotals={quarterTotals}
+      fyTotal={fyTotal}
+      expand={c.req.query("expand") ?? null}
+      projectCount={projects.length}
+      periodLabel={fyLabel(fy)}
+    />,
+  );
+});
+
+app.get("/app/clients/:id/projects/:pid", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const pid = c.req.param("pid");
+  const [clients, projects] = await Promise.all([listClients(db), listBillingProjects(db)]);
+  const client = clients.find((x) => x.id === id);
+  const project = projects.find((p) => p.id === pid && p.clientId === id);
+  if (!client || !project) return c.redirect("/app/clients");
+  const nowM = nowBillingPeriod();
+  const fy = fiscalYearOf(nowM);
+  const months = rangeInclusive(`${fy - 1}-03`, `${fy}-02`);
+  const resMap = await computeBillingMonths(db, months);
+  const projOf = (m: string): ProjectResult | null =>
+    resMap.get(m)?.clients.find((x) => x.clientId === id)?.projects.find((p) => p.projectId === pid) ?? null;
+  const perMonth = months.map(projOf);
+  const allTime = await computeBillingMonths(db, rangeInclusive(BILLING_START, nowM));
+  let invoicedToDateC = 0;
+  for (const res of allTime.values()) invoicedToDateC += res.clients.find((x) => x.clientId === id)?.projects.find((p) => p.projectId === pid)?.revenueC ?? 0;
+  return c.html(
+    <ProjectViewPage
+      client={{ id: client.id, name: client.name }}
+      project={{ id: project.id, name: project.name, billingType: project.billingType, contractValueC: project.contractValueC, invoicedToDateC }}
+      months={months}
+      perMonth={perMonth}
+      fyTotal={perMonth.reduce(aggAdd, EMPTY_AGG)}
+      periodLabel={fyLabel(fy)}
+    />,
+  );
+});
+
+// ---- Staff allocation grid ---------------------------------------------------
+
+async function allocationsProps(db: D1Database, period: string): Promise<Omit<AllocationsPageProps, "saved" | "error">> {
+  const input = await loadPeriodInput(db, period);
+  const costBy = new Map<string, number>();
+  for (const l of input.costLines) if (l.employeeId) costBy.set(l.employeeId, (costBy.get(l.employeeId) ?? 0) + l.amountC);
+  const staff = input.staff
+    .map((s) => {
+      const direct = costBy.get(s.employeeId) ?? 0;
+      const estimated = direct === 0 && s.payrollGrossC !== null;
+      const costC = direct !== 0 ? direct : estimated ? Math.round((s.payrollGrossC as number) * (1 + s.loadingPct / 100)) : 0;
+      return { employeeId: s.employeeId, name: s.name, costC, estimated };
+    })
+    .filter((s) => s.costC !== 0)
+    .sort((a, b) => b.costC - a.costC);
+  const clientOf = new Map(input.clients.map((cl) => [cl.id, cl]));
+  const activeClients = input.clients.filter((cl) => cl.active);
+  const columns: { projectId: string; label: string }[] = [];
+  for (const cl of activeClients) {
+    const def = input.projects.find((p) => p.clientId === cl.id && p.isDefault);
+    if (def) columns.push({ projectId: def.id, label: cl.shortName ?? cl.name });
+  }
+  for (const p of input.projects.filter((p) => !p.isDefault && p.status === "open")) {
+    columns.push({ projectId: p.id, label: `${clientOf.get(p.clientId)?.shortName ?? ""} · ${p.name}` });
+  }
+  const byEmp = new Map<string, StaffAllocation[]>();
+  for (const a of input.allocations) {
+    const list = byEmp.get(a.employeeId) ?? [];
+    list.push(a);
+    byEmp.set(a.employeeId, list);
+  }
+  const cells: Record<string, Record<string, number>> = {};
+  const overheadPct: Record<string, number> = {};
+  let anyAtPeriod = false;
+  let latestEarlier = "";
+  for (const [emp, rows] of byEmp) {
+    const latest = rows.reduce((mx, r) => (r.period > mx ? r.period : mx), "");
+    if (!latest) continue;
+    if (latest === period) anyAtPeriod = true;
+    else if (latest > latestEarlier) latestEarlier = latest;
+    for (const r of rows.filter((x) => x.period === latest)) {
+      if (r.targetKind === "overhead") overheadPct[emp] = (overheadPct[emp] ?? 0) + r.pct;
+      else if (r.projectId) {
+        if (!cells[emp]) cells[emp] = {};
+        cells[emp][r.projectId] = (cells[emp][r.projectId] ?? 0) + r.pct;
+      }
+    }
+  }
+  return {
+    period,
+    months: rangeInclusive(BILLING_START, nowBillingPeriod()),
+    staff,
+    columns,
+    cells,
+    overheadPct,
+    carriedFrom: !anyAtPeriod && latestEarlier ? latestEarlier : null,
+  };
+}
+
+app.get("/app/allocations", async (c) => {
+  const q = String(c.req.query("period") ?? "");
+  const period = isPeriod(q) ? q : nowBillingPeriod();
+  const props = await allocationsProps(c.env.DB, period);
+  return c.html(<AllocationsPage {...props} saved={c.req.query("saved") === "1"} error={c.req.query("err") ?? null} />);
+});
+
+app.post("/app/allocations/save", async (c) => {
+  const b = await c.req.parseBody();
+  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  const rows: AllocationInput[] = [];
+  for (const [k, v] of Object.entries(b)) {
+    if (!k.startsWith("a::")) continue;
+    const pct = parseMoney(String(v ?? "").trim() || "0");
+    if (!(pct > 0)) continue;
+    const [, employeeId, target] = k.split("::");
+    rows.push(target === "overhead" ? { employeeId, targetKind: "overhead", projectId: null, pct } : { employeeId, targetKind: "project", projectId: target, pct });
+  }
+  try {
+    await saveAllocations(c.env.DB, period, rows, (await getActor(c)) ?? "");
+  } catch (e) {
+    if (e instanceof BillingError && e.status === 422) {
+      const props = await allocationsProps(c.env.DB, period);
+      return c.html(<AllocationsPage {...props} saved={false} error={e.message} />, 422);
+    }
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/allocations?period=${period}&saved=1`);
+});
+
+app.post("/app/allocations/copy", async (c) => {
+  const b = await c.req.parseBody();
+  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  const from = isPeriod(String(b.from)) ? String(b.from) : addMonths(period, -1);
+  try {
+    await copyAllocationsForward(c.env.DB, from, period, (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/allocations?period=${period}&saved=1`);
+});
+
+app.post("/app/allocations/clear", async (c) => {
+  const b = await c.req.parseBody();
+  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  try {
+    await clearAllocations(c.env.DB, period, (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/allocations?period=${period}`);
+});
+
+// ---- Cost inbox ---------------------------------------------------------------
+
+const COST_TABS: CostInboxTab[] = ["unassigned", "unmatched", "byrule", "assigned", "overhead", "excluded"];
+
+app.get("/app/costs", async (c) => {
+  const db = c.env.DB;
+  const pKey = billingPeriodKey(c.req.query("p"));
+  const tab = (COST_TABS as string[]).includes(String(c.req.query("tab"))) ? (String(c.req.query("tab")) as CostInboxTab) : "unassigned";
+  const { months, label: periodLabel } = billingWindow(pKey);
+  const [lines, rules, targets, employees] = await Promise.all([
+    listCostLinesForPeriods(db, months),
+    listRules(db),
+    billingTargetOptions(db),
+    listEmployees(db),
+  ]);
+  const targetLabel = new Map(targets.map((t) => [t.id, t.label]));
+  const splitTargetLabel = (s: { targetKind: BillingTargetKind; projectId: string | null }) =>
+    s.targetKind === "overhead" ? "Shared Overhead" : s.targetKind === "excluded" ? "Excluded" : targetLabel.get(s.projectId ?? "") ?? "project";
+  const classify = (l: CostLineView): { tab: CostInboxTab; target: string; ruleName: string | null } => {
+    if (l.treatment === "excluded") return { tab: "excluded", target: "Excluded (account treatment)", ruleName: null };
+    if (l.employeeId) return { tab: "assigned", target: `Staff: ${l.employeeName ?? "?"} — via share %`, ruleName: null };
+    if (l.splits.length) {
+      if (l.splits.every((s) => s.targetKind === "excluded")) return { tab: "excluded", target: "Excluded (manual)", ruleName: null };
+      const target = l.splits.length === 1 ? splitTargetLabel(l.splits[0]) : `Split ${l.splits.length} ways`;
+      return { tab: "assigned", target, ruleName: null };
+    }
+    if (l.treatment === "people") return { tab: "unmatched", target: "Unmatched → General Sales", ruleName: null };
+    const rule = firstMatchingRule(rules, { supplier: l.supplier, description: l.description, glCode: l.glCode, txnDate: l.txnDate });
+    if (rule) return { tab: "byrule", target: `Rule: ${rule.name}`, ruleName: rule.name };
+    if (l.treatment === "direct") return { tab: "unassigned", target: "Unassigned → General Sales", ruleName: null };
+    return { tab: "overhead", target: "Shared Overhead pool", ruleName: null };
+  };
+  const counts: Record<CostInboxTab, number> = { unassigned: 0, unmatched: 0, byrule: 0, assigned: 0, overhead: 0, excluded: 0 };
+  const rows: CostInboxLine[] = [];
+  for (const l of lines) {
+    const k = classify(l);
+    counts[k.tab]++;
+    if (k.tab !== tab) continue;
+    rows.push({
+      id: l.id,
+      txnDate: l.txnDate,
+      supplier: l.supplier,
+      description: l.description,
+      glCode: l.glCode,
+      reportGroup: l.reportGroup ?? "Unmapped",
+      treatment: l.treatment ?? "overhead",
+      amountC: l.amountC,
+      docKind: l.docKind,
+      target: k.target,
+      employeeName: l.employeeName,
+      hasSplits: l.splits.length > 0,
+      ruleName: k.ruleName,
+    });
+  }
+  rows.sort((a, b) => Math.abs(b.amountC) - Math.abs(a.amountC));
+  return c.html(
+    <CostInboxPage
+      periodKey={pKey}
+      periodLabel={periodLabel}
+      tab={tab}
+      counts={counts}
+      lines={rows}
+      projects={targets}
+      staffOptions={employees.map((e: { id: string; name: string }) => ({ id: e.id, name: e.name }))}
+      openSplit={c.req.query("split") ?? null}
+    />,
+  );
+});
+
+const costsBack = (c: any, b: Record<string, any>, extra = "") =>
+  c.redirect(`/app/costs?p=${String(b.p ?? "month")}&tab=${String(b.tab ?? "unassigned")}${extra}`);
+
+app.post("/app/costs/assign", async (c) => {
+  const b = await c.req.parseBody({ all: true });
+  const ids = (Array.isArray(b.ids) ? b.ids : b.ids ? [b.ids] : []).map(String);
+  const target = String(b.target ?? "");
+  if (!ids.length || !target) return costsBack(c, b);
+  const split =
+    target === "overhead"
+      ? { targetKind: "overhead" as const, projectId: null, pct: 100 }
+      : target === "excluded"
+        ? { targetKind: "excluded" as const, projectId: null, pct: 100 }
+        : { targetKind: "project" as const, projectId: target, pct: 100 };
+  const actor = (await getActor(c)) ?? "";
+  try {
+    for (const id of ids) await setCostSplits(c.env.DB, id, [split], actor);
+  } catch (e) {
+    return billing409(c, e);
+  }
+  if (b.save_rule === "1" && ids.length === 1) {
+    const line = await c.env.DB.prepare("SELECT supplier, gl_code FROM cost_lines WHERE id = ?").bind(ids[0]).first<{ supplier: string | null; gl_code: string | null }>();
+    if (line?.supplier) {
+      const qs = new URLSearchParams({ edit: "new", supplier: line.supplier, target });
+      if (line.gl_code) qs.set("gl", line.gl_code);
+      return c.redirect(`/app/costs/rules?${qs.toString()}`);
+    }
+  }
+  return costsBack(c, b);
+});
+
+app.post("/app/costs/split", async (c) => {
+  const b = await c.req.parseBody();
+  const id = String(b.id ?? "");
+  const splits: { targetKind: BillingTargetKind; projectId: string | null; pct: number }[] = [];
+  for (let i = 0; i < 4; i++) {
+    const target = String(b[`split_target_${i}`] ?? "");
+    const pct = parseMoney(String(b[`split_pct_${i}`] ?? "").trim() || "0");
+    if (!target || !(pct > 0)) continue;
+    splits.push(
+      target === "overhead"
+        ? { targetKind: "overhead", projectId: null, pct }
+        : target === "excluded"
+          ? { targetKind: "excluded", projectId: null, pct }
+          : { targetKind: "project", projectId: target, pct },
+    );
+  }
+  try {
+    await setCostSplits(c.env.DB, id, splits, (await getActor(c)) ?? "");
+  } catch (e) {
+    if (e instanceof BillingError) return costsBack(c, b, `&err=${encodeURIComponent(e.message)}`);
+    throw e;
+  }
+  return costsBack(c, b);
+});
+
+app.post("/app/costs/map-payee", async (c) => {
+  const b = await c.req.parseBody();
+  try {
+    await addStaffPayee(c.env.DB, String(b.employee ?? ""), String(b.match_text ?? "").trim(), b.match_mode === "exact" ? "exact" : "contains", (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return costsBack(c, b);
+});
+
+app.post("/app/costs/import", async (c) => {
+  const b = await c.req.parseBody();
+  const file = b.file;
+  if (file instanceof File) await importCsv(c.env.DB, "cost", await file.text(), (await getActor(c)) ?? "");
+  return c.redirect("/app/costs?p=month&tab=unassigned");
+});
+
+// ---- Cost rules ---------------------------------------------------------------
+
+const ruleToEditing = (r: CostRule): CostRuleEditing => ({
+  id: r.id,
+  name: r.name,
+  priority: r.priority,
+  supplierMatch: r.supplierMatch,
+  descriptionMatch: r.descriptionMatch,
+  glCode: r.glCode,
+  mode: r.mode,
+  active: r.active,
+  effectiveFrom: r.effectiveFrom,
+  effectiveTo: r.effectiveTo,
+  splits: r.splits.map((s) => ({ projectId: s.projectId, pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
+});
+
+app.get("/app/costs/rules", async (c) => {
+  const db = c.env.DB;
+  const [rules, targets] = await Promise.all([listRules(db), billingTargetOptions(db)]);
+  const targetLabel = new Map(targets.map((t) => [t.id, t.label]));
+  const labelOf = (projectId: string | null) => (projectId === null ? "Shared Overhead" : targetLabel.get(projectId) ?? "project");
+  const listRows: CostRuleListRow[] = rules.map((r) => ({
+    id: r.id,
+    name: r.name,
+    priority: r.priority,
+    supplierMatch: r.supplierMatch,
+    descriptionMatch: r.descriptionMatch,
+    glCode: r.glCode,
+    mode: r.mode,
+    active: r.active,
+    effectiveFrom: r.effectiveFrom,
+    effectiveTo: r.effectiveTo,
+    splits: r.splits.map((s) => ({ label: labelOf(s.projectId), pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
+  }));
+  const edit = c.req.query("edit") ?? null;
+  let editing: CostRuleEditing | null = null;
+  let editingRule: CostRule | null = null;
+  if (edit === "new") {
+    const supplier = c.req.query("supplier")?.trim() || null;
+    const target = c.req.query("target") ?? "";
+    editing = {
+      id: "",
+      name: supplier ? `${supplier} split` : "",
+      priority: 100,
+      supplierMatch: supplier,
+      descriptionMatch: null,
+      glCode: c.req.query("gl")?.trim() || null,
+      mode: "percent",
+      active: true,
+      effectiveFrom: null,
+      effectiveTo: null,
+      splits: target ? [{ projectId: target === "overhead" || target === "excluded" ? null : target, pct: 100, fixedC: null, isRemainder: false }] : [],
+    };
+    if (supplier) {
+      editingRule = { ...editing, id: "preview", splits: editing.splits.map((s) => ({ targetKind: s.projectId === null ? "overhead" : "project", projectId: s.projectId, pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })) };
+    }
+  } else if (edit) {
+    const r = rules.find((x) => x.id === edit) ?? null;
+    if (r) {
+      editing = ruleToEditing(r);
+      editingRule = r;
+    }
+  }
+  let preview: CostRulePreviewRow[] | null = null;
+  if (editingRule) {
+    const rows = await rulePreview(db, editingRule, 3);
+    preview = rows.map((p) => ({
+      txnDate: p.line.txnDate,
+      supplier: p.line.supplier,
+      description: p.line.description,
+      amountC: p.line.amountC,
+      pieces: p.pieces.map((piece) => ({ label: piece.targetKind === "overhead" ? "Shared Overhead" : labelOf(piece.projectId), amountC: piece.amountC })),
+    }));
+  }
+  return c.html(<CostRulesPage rules={listRows} editing={editing} projects={targets} preview={preview} error={c.req.query("err") ?? null} />);
+});
+
+app.post("/app/costs/rule", async (c) => {
+  const b = await c.req.parseBody();
+  const mode = b.mode === "fixed" ? ("fixed" as const) : ("percent" as const);
+  const splits: CostRule["splits"] = [];
+  for (let i = 0; i < 6; i++) {
+    const target = String(b[`split_target_${i}`] ?? "");
+    if (!target) continue;
+    const pctRaw = String(b[`split_pct_${i}`] ?? "").trim();
+    const fixedRaw = String(b[`split_fixed_${i}`] ?? "").trim();
+    splits.push({
+      targetKind: target === "overhead" ? "overhead" : "project",
+      projectId: target === "overhead" ? null : target,
+      pct: pctRaw === "" ? null : parseMoney(pctRaw),
+      fixedC: fixedRaw === "" ? null : Math.round(parseMoney(fixedRaw) * 100),
+      isRemainder: String(b.remainder ?? "") === String(i),
+    });
+  }
+  // Percent mode with a remainder leg: give it whatever tops the others up to 100.
+  if (mode === "percent") {
+    const rem = splits.find((s) => s.isRemainder && s.pct === null);
+    if (rem) rem.pct = Math.max(0, 100 - splits.reduce((s, x) => s + (x.pct ?? 0), 0));
+  }
+  const rule: CostRule = {
+    id: String(b.id ?? "") || crypto.randomUUID(),
+    name: String(b.name ?? "").trim(),
+    priority: Number(b.priority ?? 100) || 100,
+    supplierMatch: String(b.supplier_match ?? "").trim() || null,
+    descriptionMatch: String(b.description_match ?? "").trim() || null,
+    glCode: String(b.gl_code ?? "").trim() || null,
+    mode,
+    effectiveFrom: String(b.effective_from ?? "").trim() || null,
+    effectiveTo: String(b.effective_to ?? "").trim() || null,
+    active: b.active === "1",
+    splits,
+  };
+  try {
+    await saveRule(c.env.DB, rule, (await getActor(c)) ?? "");
+  } catch (e) {
+    if (e instanceof BillingError) return c.redirect(`/app/costs/rules?edit=${b.id ? String(b.id) : "new"}&err=${encodeURIComponent(e.message)}`);
+    throw e;
+  }
+  return c.redirect("/app/costs/rules");
+});
+
+app.post("/app/costs/rule/toggle", async (c) => {
+  const b = await c.req.parseBody();
+  const rules = await listRules(c.env.DB);
+  const r = rules.find((x) => x.id === String(b.id));
+  if (r) await saveRule(c.env.DB, { ...r, active: !r.active }, (await getActor(c)) ?? "");
+  return c.redirect("/app/costs/rules");
+});
+
+app.post("/app/costs/rule/delete", async (c) => {
+  const b = await c.req.parseBody();
+  if (b.id) await deleteRule(c.env.DB, String(b.id), (await getActor(c)) ?? "");
+  return c.redirect("/app/costs/rules");
+});
+
+// ---- Revenue lines -------------------------------------------------------------
+
+app.get("/app/revenue", async (c) => {
+  const db = c.env.DB;
+  const pKey = billingPeriodKey(c.req.query("p"));
+  const { months, label: periodLabel } = billingWindow(pKey);
+  const [lines, clients, targets] = await Promise.all([listRevenueLinesForPeriods(db, months), listClients(db), billingTargetOptions(db)]);
+  const unmappedMap = new Map<string, { contactName: string; amountC: number; lineCount: number }>();
+  for (const l of lines) {
+    if (!l.unmapped) continue;
+    const name = l.contactName ?? "(no contact)";
+    const prev = unmappedMap.get(name);
+    unmappedMap.set(name, prev ? { contactName: name, amountC: prev.amountC + l.amountC, lineCount: prev.lineCount + 1 } : { contactName: name, amountC: l.amountC, lineCount: 1 });
+  }
+  const catGroups = new Map((await listGlCategories(db)).map((g) => [g.code, g.reportGroup]));
+  const rows: RevenueLineRow[] = lines.map((l) => ({
+    id: l.id,
+    txnDate: l.txnDate,
+    docNumber: l.docNumber,
+    docType: l.docType,
+    contactName: l.contactName,
+    clientName: l.clientName,
+    projectName: l.projectName,
+    isDefaultProject: l.projectId === null,
+    reportGroup: (l.glCode ? catGroups.get(l.glCode) : null) ?? "Unmapped",
+    amountC: l.amountC,
+    source: l.source,
+  }));
+  return c.html(
+    <RevenueLinesPage
+      periodKey={pKey}
+      periodLabel={periodLabel}
+      unmapped={[...unmappedMap.values()].sort((a, b) => b.amountC - a.amountC)}
+      lines={rows}
+      clients={clients.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+      projects={targets}
+      totalC={rows.reduce((s, r) => s + r.amountC, 0)}
+      openLine={c.req.query("open") ?? null}
+    />,
+  );
+});
+
+app.post("/app/revenue/map-contact", async (c) => {
+  const b = await c.req.parseBody();
+  try {
+    await mapContact(c.env.DB, String(b.client ?? ""), String(b.contact ?? "").trim(), (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/revenue?p=${String(b.p ?? "month")}`);
+});
+
+app.post("/app/revenue/project-override", async (c) => {
+  const b = await c.req.parseBody();
+  try {
+    await setRevenueProjectOverride(c.env.DB, String(b.id ?? ""), String(b.project ?? "") || null, (await getActor(c)) ?? "");
+  } catch (e) {
+    return billing409(c, e);
+  }
+  return c.redirect(`/app/revenue?p=${String(b.p ?? "month")}`);
+});
+
+app.post("/app/revenue/import", async (c) => {
+  const b = await c.req.parseBody();
+  const file = b.file;
+  if (file instanceof File) await importCsv(c.env.DB, "revenue", await file.text(), (await getActor(c)) ?? "");
+  return c.redirect("/app/revenue?p=month");
+});
 
 app.notFound((c) => c.html(<Landing />, 404));
 

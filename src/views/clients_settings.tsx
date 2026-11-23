@@ -1,0 +1,438 @@
+import type { FC } from "hono/jsx";
+import { Layout, Info } from "./layout";
+import type { Treatment, OverheadBasis } from "../lib/billing_types";
+import { formatZAR } from "../lib/money";
+import { label } from "../lib/period";
+
+/** Cents → whole-rand display. */
+const R = (c: number) => formatZAR(Math.round(c / 100));
+
+export type SettingsProject = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  billingType: "fixed" | "retainer" | "time" | "recurring";
+  contractValueC: number | null;
+  status: "open" | "closed";
+};
+
+export type SettingsClient = {
+  id: string;
+  name: string;
+  shortName: string | null;
+  isGeneral: boolean;
+  active: boolean;
+  sortOrder: number;
+  projects: SettingsProject[];
+  contacts: { id: string; contactName: string }[];
+};
+
+export type SettingsCategory = {
+  code: string;
+  name: string;
+  kind: "revenue" | "cost";
+  reportGroup: string;
+  treatment: Treatment;
+  active: boolean;
+};
+
+export type SettingsStaff = {
+  employeeId: string;
+  name: string;
+  defaultTarget: "general" | "overhead";
+  loadingPct: number;
+  payees: { id: string; matchText: string; matchMode: "exact" | "contains" }[];
+};
+
+export type ClientsSettingsPageProps = {
+  clients: SettingsClient[];
+  categories: SettingsCategory[];
+  staff: SettingsStaff[];
+  basisPeriod: string;
+  basis: OverheadBasis;
+  fixedShares: { clientId: string; pct: number }[];
+  saved: boolean;
+  error: string | null;
+};
+
+const BILLING_TYPES: SettingsProject["billingType"][] = ["fixed", "retainer", "time", "recurring"];
+
+const REVENUE_TREATMENTS: Treatment[] = ["revenue", "excluded"];
+const COST_TREATMENTS: Treatment[] = ["people", "direct", "overhead", "excluded"];
+
+/**
+ * Clients settings — the module's master data: clients & projects, contact
+ * mappings, GL category treatments, staff defaults & payee aliases, and the
+ * overhead recovery basis. Each row saves via its own small form (multi-cell
+ * inputs reference their form by id).
+ */
+export const ClientsSettingsPage: FC<ClientsSettingsPageProps> = ({
+  clients,
+  categories,
+  staff,
+  basisPeriod,
+  basis,
+  fixedShares,
+  saved,
+  error,
+}) => {
+  const revenueCats = categories.filter((c) => c.kind === "revenue");
+  const costCats = categories.filter((c) => c.kind === "cost");
+  const shareOf = (clientId: string): number => fixedShares.find((s) => s.clientId === clientId)?.pct ?? 0;
+  const fixedTotal = clients.reduce((s, c) => s + shareOf(c.id), 0);
+
+  return (
+    <Layout title="Clients settings" authed section="clients" wide>
+      <div class="container" style="max-width:1320px">
+        <div class="row spread">
+          <div>
+            <h1 style="margin-top:12px">Clients — settings</h1>
+            <p class="muted" style="margin-top:0">
+              Master data behind the client P&amp;L: clients and their projects, contact→client mappings, account
+              treatments, staff defaults, and how the shared overhead pool is recovered.
+            </p>
+          </div>
+          <a class="btn btn-sm" style="margin-top:16px" href="/app/clients">← Clients</a>
+        </div>
+
+        {error ? (
+          <div class="callout section-block" style="border-left-color:var(--danger)">
+            <strong class="neg">Not saved:</strong> {error}
+          </div>
+        ) : null}
+        {saved ? <p style="margin:14px 0 0"><span class="badge income">✓ Saved</span></p> : null}
+
+        {/* 1 — Clients & projects ------------------------------------------- */}
+        <div class="section-block">
+          <h2>Clients &amp; projects</h2>
+          {clients.map((c) => (
+            <div class="card" style="margin-top:14px">
+              <div class="row spread">
+                <strong>
+                  {c.name}
+                  {c.shortName ? <span class="muted" style="font-weight:400"> · {c.shortName}</span> : null}
+                  {c.isGeneral ? <span class="badge manual" style="margin-left:8px">general</span> : null}
+                  {!c.active ? <span class="badge cost" style="margin-left:8px">inactive</span> : null}
+                </strong>
+                <span class="muted" style="font-size:12px">sort {c.sortOrder} · {c.projects.length} project(s)</span>
+              </div>
+              <table style="border-collapse:collapse;font-size:13px;width:100%;margin-top:10px">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;padding:4px 14px 4px 0;color:var(--muted)">Project</th>
+                    <th style="text-align:left;padding:4px 14px 4px 0;color:var(--muted)">Billing</th>
+                    <th style="text-align:right;padding:4px 14px 4px 0;color:var(--muted)">Contract value</th>
+                    <th style="text-align:left;padding:4px 0;color:var(--muted)"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.projects.map((p) => {
+                    const fid = `proj-${p.id}`;
+                    return (
+                      <tr style={p.status === "closed" ? "opacity:.5" : ""}>
+                        <td style="padding:4px 14px 4px 0">
+                          <form id={fid} method="post" action="/app/clients/settings/project" style="display:none"></form>
+                          <input type="hidden" name="id" value={p.id} form={fid} />
+                          <input
+                            type="text"
+                            name="name"
+                            value={p.name}
+                            form={fid}
+                            style="width:240px;padding:6px 8px;font-size:13px"
+                          />
+                          {p.isDefault ? <span class="badge recurring" style="margin-left:6px">default</span> : null}
+                          {p.status === "closed" ? <span class="badge actual" style="margin-left:6px">closed</span> : null}
+                        </td>
+                        <td style="padding:4px 14px 4px 0">
+                          <select name="billing_type" form={fid} style="width:auto;padding:6px 8px;font-size:13px">
+                            {BILLING_TYPES.map((bt) => (
+                              <option value={bt} selected={p.billingType === bt}>{bt}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td style="padding:4px 14px 4px 0;text-align:right">
+                          <input
+                            type="text"
+                            name="contract_value"
+                            inputmode="decimal"
+                            value={p.contractValueC != null ? String(Math.round(p.contractValueC / 100)) : ""}
+                            form={fid}
+                            placeholder="R"
+                            style="width:120px;padding:6px 8px;font-size:13px;text-align:right"
+                          />
+                        </td>
+                        <td style="padding:4px 0">
+                          <div class="row" style="gap:6px">
+                            <button class="btn btn-sm" type="submit" form={fid}>Save</button>
+                            {!p.isDefault && p.status === "open" ? (
+                              <form
+                                method="post"
+                                action="/app/clients/settings/project/close"
+                                style="margin:0"
+                                onsubmit="return confirm('Close this project? Closed projects stop appearing in allocation and assignment pickers.')"
+                              >
+                                <input type="hidden" name="id" value={p.id} />
+                                <button class="btn btn-sm btn-danger" type="submit">Close</button>
+                              </form>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <form method="post" action="/app/clients/settings/project" class="row" style="gap:8px;margin-top:10px">
+                <input type="hidden" name="client" value={c.id} />
+                <input type="text" name="name" required placeholder="New project name" style="width:220px;padding:6px 8px;font-size:13px" />
+                <select name="billing_type" style="width:auto;padding:6px 8px;font-size:13px">
+                  {BILLING_TYPES.map((bt) => <option value={bt}>{bt}</option>)}
+                </select>
+                <input type="text" name="contract_value" inputmode="decimal" placeholder="Contract R (optional)" style="width:160px;padding:6px 8px;font-size:13px" />
+                <button class="btn btn-sm" type="submit">+ Add project</button>
+              </form>
+            </div>
+          ))}
+          <form method="post" action="/app/clients/settings/client" class="row" style="gap:8px;margin-top:14px">
+            <input type="text" name="name" required placeholder="New client name" style="width:240px;padding:6px 8px;font-size:13px" />
+            <input type="text" name="short_name" placeholder="Short name" style="width:140px;padding:6px 8px;font-size:13px" />
+            <button class="btn btn-sm btn-primary" type="submit">+ Add client</button>
+          </form>
+        </div>
+
+        {/* 2 — Contact mappings --------------------------------------------- */}
+        <div class="section-block">
+          <h2>Contact mappings</h2>
+          <p class="muted" style="font-size:13px;margin-top:4px">
+            Xero contact → client. Unmapped contacts' revenue lands in General Sales (the{" "}
+            <a href="/app/revenue">Revenue lines</a> page lists them).
+          </p>
+          <div class="tablewrap" style="max-width:720px">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th style="text-align:left">Contact</th>
+                  <th style="text-align:left">Client</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.flatMap((c) =>
+                  c.contacts.map((ct) => (
+                    <tr>
+                      <td style="text-align:left">{ct.contactName}</td>
+                      <td style="text-align:left">{c.name}</td>
+                      <td style="text-align:left">
+                        <form method="post" action="/app/clients/settings/contact/delete" style="margin:0">
+                          <input type="hidden" name="id" value={ct.id} />
+                          <button class="btn btn-sm btn-danger" type="submit">✕</button>
+                        </form>
+                      </td>
+                    </tr>
+                  )),
+                )}
+              </tbody>
+            </table>
+          </div>
+          <form method="post" action="/app/clients/settings/contact" class="row" style="gap:8px;margin-top:10px">
+            <input type="text" name="contact_name" required placeholder="Contact name (as in Xero)" style="width:260px;padding:6px 8px;font-size:13px" />
+            <select name="client" style="width:auto;min-width:180px;padding:6px 8px;font-size:13px">
+              {clients.map((c) => <option value={c.id}>{c.name}</option>)}
+            </select>
+            <button class="btn btn-sm" type="submit">+ Add mapping</button>
+          </form>
+        </div>
+
+        {/* 3 — Categories ---------------------------------------------------- */}
+        <div class="section-block">
+          <h2>Account categories</h2>
+          <p class="muted" style="font-size:13px;margin-top:4px">
+            How each GL account is treated.{" "}
+            <Info text="Revenue accounts are revenue or excluded. Cost accounts are people (staff cost), direct (client-assignable), overhead (shared pool) or excluded (e.g. tax, depreciation)." />
+          </p>
+          {[
+            { title: "Revenue accounts", cats: revenueCats, treatments: REVENUE_TREATMENTS },
+            { title: "Cost accounts", cats: costCats, treatments: COST_TREATMENTS },
+          ].map((grp) => (
+            <div class="tablewrap" style="max-width:860px;margin-top:12px">
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th style="text-align:left">{grp.title}</th>
+                    <th style="text-align:left">Name</th>
+                    <th style="text-align:left">Report group</th>
+                    <th style="text-align:left">Treatment</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grp.cats.map((cat) => {
+                    const fid = `cat-${cat.code}`;
+                    return (
+                      <tr style={cat.active ? "" : "opacity:.5"}>
+                        <td style="text-align:left">
+                          <form id={fid} method="post" action="/app/clients/settings/category" style="display:none"></form>
+                          <input type="hidden" name="code" value={cat.code} form={fid} />
+                          {cat.code}
+                        </td>
+                        <td style="text-align:left" class="muted">{cat.name}</td>
+                        <td style="text-align:left">
+                          <input type="text" name="report_group" value={cat.reportGroup} form={fid} style="width:180px;padding:6px 8px;font-size:13px" />
+                        </td>
+                        <td style="text-align:left">
+                          <select name="treatment" form={fid} style="width:auto;padding:6px 8px;font-size:13px">
+                            {grp.treatments.map((t) => <option value={t} selected={cat.treatment === t}>{t}</option>)}
+                          </select>
+                        </td>
+                        <td style="text-align:left">
+                          <button class="btn btn-sm" type="submit" form={fid}>Save</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+
+        {/* 4 — Staff ---------------------------------------------------------- */}
+        <div class="section-block">
+          <h2>Staff</h2>
+          <p class="muted" style="font-size:13px;margin-top:4px">
+            Default target takes a person's unallocated remainder; loading % grosses up payroll cost for
+            employer contributions. Payee aliases match Xero payment payees to the staff member.
+          </p>
+          <div class="tablewrap" style="max-width:1000px">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th style="text-align:left">Staff member</th>
+                  <th style="text-align:left">Default target</th>
+                  <th>Loading %</th>
+                  <th style="text-align:left">Payee aliases</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {staff.map((s) => {
+                  const fid = `staff-${s.employeeId}`;
+                  return (
+                    <tr>
+                      <td style="text-align:left">
+                        <form id={fid} method="post" action="/app/clients/settings/staff" style="display:none"></form>
+                        <input type="hidden" name="employee" value={s.employeeId} form={fid} />
+                        <strong>{s.name}</strong>
+                      </td>
+                      <td style="text-align:left">
+                        <select name="default_target" form={fid} style="width:auto;padding:6px 8px;font-size:13px">
+                          <option value="general" selected={s.defaultTarget === "general"}>general</option>
+                          <option value="overhead" selected={s.defaultTarget === "overhead"}>overhead</option>
+                        </select>
+                      </td>
+                      <td class="num">
+                        <input name="loading_pct" value={String(s.loadingPct)} inputmode="decimal" size={5} form={fid} autocomplete="off" />
+                      </td>
+                      <td style="text-align:left">
+                        {s.payees.length === 0 ? <span class="muted" style="font-size:12px">—</span> : null}
+                        {s.payees.map((p) => (
+                          <form method="post" action="/app/clients/settings/payee/delete" style="display:inline-block;margin:0 6px 4px 0">
+                            <input type="hidden" name="id" value={p.id} />
+                            <span class="badge actual" title={p.matchMode}>
+                              {p.matchText}
+                              <button
+                                type="submit"
+                                style="background:none;border:0;color:var(--danger);cursor:pointer;padding:0 0 0 6px;font-size:11px"
+                                title="Delete alias"
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          </form>
+                        ))}
+                      </td>
+                      <td style="text-align:left">
+                        <button class="btn btn-sm" type="submit" form={fid}>Save</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <form method="post" action="/app/clients/settings/payee" class="row" style="gap:8px;margin-top:10px">
+            <select name="employee" style="width:auto;min-width:180px;padding:6px 8px;font-size:13px">
+              {staff.map((s) => <option value={s.employeeId}>{s.name}</option>)}
+            </select>
+            <input type="text" name="match_text" required placeholder="Payee match text" style="width:220px;padding:6px 8px;font-size:13px" />
+            <select name="match_mode" style="width:auto;padding:6px 8px;font-size:13px">
+              <option value="exact">exact</option>
+              <option value="contains">contains</option>
+            </select>
+            <button class="btn btn-sm" type="submit">+ Add alias</button>
+          </form>
+        </div>
+
+        {/* 5 — Overhead basis -------------------------------------------------- */}
+        <div class="section-block">
+          <h2>Overhead recovery basis</h2>
+          <p class="muted" style="font-size:13px;margin-top:4px">
+            How the shared pool is spread across clients from <strong>{label(basisPeriod)}</strong> onward.{" "}
+            <Info text="Revenue: in proportion to each client's revenue. Direct cost: in proportion to people + direct cost. Fixed: the percentages below, which must total exactly 100." />
+          </p>
+          <form method="post" action="/app/clients/settings/basis" class="card" style="max-width:720px;margin-top:10px">
+            <div class="formgrid">
+              <div>
+                <label>Effective from (month)</label>
+                <input type="month" name="period" value={basisPeriod} style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:#0c0f14;color:var(--text);font-size:14px" />
+              </div>
+              <div>
+                <label>Basis</label>
+                <select name="basis">
+                  <option value="revenue" selected={basis === "revenue"}>Revenue share</option>
+                  <option value="direct_cost" selected={basis === "direct_cost"}>Direct-cost share</option>
+                  <option value="fixed" selected={basis === "fixed"}>Fixed percentages</option>
+                </select>
+              </div>
+            </div>
+            {basis === "fixed" ? (
+              <div style="margin-top:14px">
+                <strong style="font-size:13px">Fixed shares</strong>{" "}
+                <span class={`muted ${Math.abs(fixedTotal - 100) > 0.001 ? "neg" : ""}`} style="font-size:12px">
+                  — currently total {fixedTotal}% (must total 100%)
+                </span>
+                <table style="border-collapse:collapse;font-size:13px;margin-top:6px">
+                  <tbody>
+                    {clients.map((c) => (
+                      <tr>
+                        <td style="padding:3px 14px 3px 0">{c.name}</td>
+                        <td style="padding:3px 0">
+                          <input
+                            name={`share::${c.id}`}
+                            value={shareOf(c.id) ? String(shareOf(c.id)) : ""}
+                            size={5}
+                            inputmode="decimal"
+                            autocomplete="off"
+                            style="width:80px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);text-align:right"
+                          />
+                          <span class="muted" style="font-size:12px"> %</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p class="muted" style="font-size:12px;margin:12px 0 0">
+                Switch the basis to <strong>Fixed percentages</strong> and save to capture per-client shares.
+              </p>
+            )}
+            <div class="toolbar" style="margin-bottom:0">
+              <button class="btn btn-primary" type="submit">Save basis</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Layout>
+  );
+};
