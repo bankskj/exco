@@ -451,7 +451,16 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
               <div><label>Priority</label><input type="number" name="priority" value={String(editing.priority)} /></div>
               <div><label>Supplier contains</label><input type="text" name="supplier_match" value={editing.supplierMatch ?? ""} /></div>
               <div><label>Description contains</label><input type="text" name="description_match" value={editing.descriptionMatch ?? ""} /></div>
-              <div><label>Account code</label><input type="text" name="gl_code" value={editing.glCode ?? ""} /></div>
+              <div>
+                <label>Account code</label>
+                <input type="text" name="gl_code" value={editing.glCode ?? ""} />
+                {editing.glCode ? (
+                  <p class="muted" style="font-size:11px;margin:4px 0 0">
+                    ⚠ Only matches this supplier's lines on account {editing.glCode} — clear it to catch every account
+                    (keep it for generic payees like “Bank Transaction”).
+                  </p>
+                ) : null}
+              </div>
               <div>
                 <label>Mode</label>
                 <select name="mode">
