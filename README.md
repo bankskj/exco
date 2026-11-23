@@ -44,6 +44,10 @@ npm run db:migrate:remote                 # apply migrations to remote D1
 npm run deploy
 ```
 
+Straight after a deploy that adds migrations, run **Sync now** (Expenses tab).
+Until the first sync, recurring schedules and invoice due dates are empty, and
+the forecast keeps the trend estimate for income.
+
 ## Routes
 
 | Route            | Access    | Purpose                         |

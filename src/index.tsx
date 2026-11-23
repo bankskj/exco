@@ -821,7 +821,11 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   // listed on the Recurring page but kept out of the totals.
   const schedules = (await listRepeatingSchedules(env.DB)).filter((s) => s.currency === "ZAR");
   const today = new Date().toISOString().slice(0, 10);
-  const projected = projectSchedules(schedules, today);
+  // Project schedules to the end of the engine window (never less than the
+  // default 12 months), so no forecast month is left with zero income.
+  const engineEnd = addMonths(settings.actuals_through, Math.max(1, settings.horizon_months));
+  const recurringMonths = Math.max(RECURRING_HORIZON_MONTHS, monthsBetweenIncl(today.slice(0, 7), engineEnd));
+  const projected = projectSchedules(schedules, today, recurringMonths);
   const recurringByMonth = groupByDueMonth(projected, schedules, today);
   const openInvoices = openSalesByMonth(await listOpenSales(env.DB), today.slice(0, 7));
   const scheduled: import("./lib/cashflow_engine").CfScheduled = {
@@ -832,12 +836,15 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     openInvoices,
     received: new Map([[today.slice(0, 7), await salesReceivedInMonth(env.DB, today.slice(0, 7))]]),
     coveredFrom: today.slice(0, 7),
-    coveredThrough: addMonths(today.slice(0, 7), RECURRING_HORIZON_MONTHS - 1),
+    coveredThrough: addMonths(today.slice(0, 7), recurringMonths - 1),
   };
+  // Until the first sync after deploy the schedules table is empty: keep the
+  // trend estimate for income rather than showing a collapsed forecast.
+  const repeatingSynced = await getMeta(env.DB, "xero_repeating_synced");
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
-  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor, scheduled);
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor, repeatingSynced ? scheduled : null);
   // Collections gap: invoiced (accrual) vs received (cash) per complete month,
   // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
   const debtors = await listCfDebtors(env.DB);
@@ -853,7 +860,9 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     .filter((r) => r.invoiced !== 0 || r.received !== 0);
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
-    : undefined;
+    : !repeatingSynced
+      ? "Recurring invoices have not been synced yet, so forecast income is still the trend estimate. Run a Xero sync on the Expenses tab."
+      : undefined;
   const debtorsDue = [...debtors.values()].reduce((t, d) => t + d.due, 0);
   const revolving = Number((await getMeta(env.DB, "cf_revolving_owed")) ?? 0) || 0;
   const facilityLimitRaw = await getMeta(env.DB, "cf_facility_limit");
