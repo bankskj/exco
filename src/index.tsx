@@ -2363,17 +2363,17 @@ async function buildCloseChecks(db: D1Database, period: string, result: PeriodRe
       href: null,
     },
     {
-      label: "No unmapped revenue contacts",
-      level: "block",
+      label: "Contacts defaulting to General Sales",
+      level: "warn",
       pass: ex.unmappedContacts.length === 0,
-      detail: ex.unmappedContacts.length ? ex.unmappedContacts.map((u) => u.contactName).join(", ") : null,
+      detail: ex.unmappedContacts.length ? `${ex.unmappedContacts.length} contact(s) — fine if they belong in General; map or accept them on the Revenue page` : null,
       href: "/app/revenue?p=month",
     },
     {
-      label: "No unmatched staff payments",
-      level: "block",
+      label: "Staff payments defaulting to General Sales",
+      level: "warn",
       pass: ex.unmatchedStaff.length === 0,
-      detail: ex.unmatchedStaff.length ? `${ex.unmatchedStaff.length} line(s), ${fmtR(ex.unmatchedStaff.reduce((s, u) => s + u.amountC, 0))}` : null,
+      detail: ex.unmatchedStaff.length ? `${ex.unmatchedStaff.length} line(s), ${fmtR(ex.unmatchedStaff.reduce((s, u) => s + u.amountC, 0))} — add payee aliases to follow the person` : null,
       href: "/app/costs?p=month&tab=unmatched",
     },
     {
@@ -3102,12 +3102,32 @@ app.get("/app/revenue", async (c) => {
       periodLabel={periodLabel}
       unmapped={[...unmappedMap.values()].sort((a, b) => b.amountC - a.amountC)}
       lines={rows}
-      clients={clients.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+      clients={clients.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, isGeneral: x.isGeneral }))}
       projects={targets}
       totalC={rows.reduce((s, r) => s + r.amountC, 0)}
       openLine={c.req.query("open") ?? null}
     />,
   );
+});
+
+app.post("/app/revenue/accept-general", async (c) => {
+  const b = await c.req.parseBody();
+  const db = c.env.DB;
+  const general = (await listClients(db)).find((x) => x.isGeneral);
+  if (general) {
+    const { results } = await db
+      .prepare("SELECT DISTINCT contact_name FROM revenue_lines WHERE client_id IS NULL AND contact_name IS NOT NULL")
+      .all<{ contact_name: string }>();
+    const actor = (await getActor(c)) ?? "";
+    for (const r of results ?? []) {
+      try {
+        await mapContact(db, general.id, r.contact_name, actor);
+      } catch {
+        // a mapping that already exists (race / case variant) is fine — skip
+      }
+    }
+  }
+  return c.redirect(`/app/revenue?p=${String(b.p ?? "month")}`);
 });
 
 app.post("/app/revenue/map-contact", async (c) => {

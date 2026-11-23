@@ -36,8 +36,7 @@ belongs to a client), the **Shared Overhead pool**, or **Excluded**.
 
 Each client has exactly **one default project** (`is_default = 1`); revenue and
 cost aimed at a client without a project land there. Extra projects are created
-only when a client needs a split. An unmapped revenue contact goes to General
-Sales and is flagged (and blocks month close until mapped).
+only when a client needs a split. An unmapped revenue contact reports under General Sales **by default** — nothing is ever unallocated. The Revenue page lists defaulting contacts so they can be mapped to a key account or accepted into General Sales explicitly; defaulting contacts warn at month close but do not block it.
 
 Key terms: **Contribution** = Revenue − People − Direct. **Net margin** =
 Contribution − Overhead Recovery. **Shared Overhead** = company running costs +
@@ -194,9 +193,9 @@ this/last quarter, this FY, all time; Mar–Feb FY).
 
 ## 6. Month close and audit
 
-Close checklist — blockers: reconciliation to the cent, no unmapped revenue
-contacts, no unmatched staff payments, no allocation rows over 100%. Warnings
-(need a tick): unassigned direct lines, staff on payroll estimates, Xero P&L
+Close checklist — blockers: reconciliation to the cent and no allocation rows
+over 100%. Warnings (need a tick): contacts and staff payments defaulting to
+General Sales, unassigned direct lines, staff on payroll estimates, Xero P&L
 tie-out difference. Close computes the period, freezes it in
 `period_snapshots.result_json` and sets the period closed; reports for closed
 periods read the snapshot. Writes touching a closed period are rejected with

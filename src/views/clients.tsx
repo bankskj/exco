@@ -153,7 +153,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
             {(() => {
               const ex = result.exceptions;
               const chips: { count: number; text: string; href: string }[] = [
-                { count: ex.unmappedContacts.length, text: "unmapped revenue contact(s)", href: `/app/revenue?p=${periodKey}` },
+                { count: ex.unmappedContacts.length, text: "contact(s) defaulting to General", href: `/app/revenue?p=${periodKey}` },
                 { count: ex.unassignedDirect.length, text: "unassigned direct cost(s)", href: `/app/costs?p=${periodKey}&tab=unassigned` },
                 { count: ex.unmatchedStaff.length, text: "unmatched staff payment(s)", href: `/app/costs?p=${periodKey}&tab=unmatched` },
                 { count: ex.estimatedStaff.length, text: "payroll estimate(s)", href: "/app/allocations" },

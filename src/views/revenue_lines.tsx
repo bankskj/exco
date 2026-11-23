@@ -27,7 +27,7 @@ export type RevenueLinesPageProps = {
   /** Contacts with no client mapping (their revenue landed in General Sales). */
   unmapped: { contactName: string; amountC: number; lineCount: number }[];
   lines: RevenueLineRow[];
-  clients: { id: string; name: string }[];
+  clients: { id: string; name: string; isGeneral: boolean }[];
   projects: { id: string; label: string; clientId: string }[];
   totalC: number;
   /** Line id whose project-override row is open (?open=). */
@@ -69,11 +69,17 @@ export const RevenueLinesPage: FC<RevenueLinesPageProps> = ({
         </div>
 
         {unmapped.length > 0 ? (
-          <div class="card section-block" style="border-color:rgba(255,107,107,.4)">
-            <h3>Unmapped contacts — {unmapped.length}</h3>
+          <div class="card section-block">
+            <h3>Defaulting to General Sales — {unmapped.length}</h3>
             <p class="muted" style="font-size:12px;margin:0 0 10px">
-              Revenue from these contacts is sitting in General Sales. Map each to a client and it moves on the next recompute.
+              Nothing is unallocated: revenue from contacts without a mapping reports under <strong>General Sales by
+              default</strong>. Map one to a key account to move it, or accept the rest to keep them in General Sales
+              explicitly (they stop being listed here).
             </p>
+            <form method="post" action="/app/revenue/accept-general" class="row" style="gap:10px;margin:0 0 12px">
+              <input type="hidden" name="p" value={periodKey} />
+              <button class="btn btn-sm" type="submit">✓ Accept all {unmapped.length} into General Sales</button>
+            </form>
             <table style="border-collapse:collapse;font-size:13px;width:100%">
               <tbody>
                 {unmapped.map((u) => (
@@ -88,7 +94,7 @@ export const RevenueLinesPage: FC<RevenueLinesPageProps> = ({
                         <input type="hidden" name="contact" value={u.contactName} />
                         <input type="hidden" name="p" value={periodKey} />
                         <select name="client" style="width:auto;min-width:180px;padding:5px 8px;font-size:13px">
-                          {clients.map((c) => <option value={c.id}>{c.name}</option>)}
+                          {clients.map((c) => <option value={c.id} selected={c.isGeneral}>{c.name}</option>)}
                         </select>
                         <button class="btn btn-sm btn-primary" type="submit">Map</button>
                       </form>
@@ -129,7 +135,9 @@ export const RevenueLinesPage: FC<RevenueLinesPageProps> = ({
                         {l.docType ? <span class="cellhint"> {l.docType.toLowerCase()}</span> : null}
                       </td>
                       <td style="text-align:left">{l.contactName ?? <span class="muted">—</span>}</td>
-                      <td style="text-align:left">{l.clientName ?? <span class="badge cost">unmapped</span>}</td>
+                      <td style="text-align:left">
+                        {l.clientName ?? <span>General Sales <span class="badge manual" title="No contact mapping — reporting under General Sales by default">defaulted</span></span>}
+                      </td>
                       <td style="text-align:left">
                         <a href={isOpen ? base : `${base}&open=${encodeURIComponent(l.id)}`}>
                           {l.projectName ?? "—"} <span class="muted" style="font-size:10px">{isOpen ? "▲" : "▼"}</span>
