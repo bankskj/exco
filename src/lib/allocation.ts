@@ -232,6 +232,47 @@ export function computePeriod(input: PeriodInput): PeriodResult {
     }
     costInLinesC += line.amountC;
 
+    const group = groupOf(line.glCode);
+
+    // Manual splits are an explicit per-line decision — they beat the automatic
+    // payee match and rules. A "staff" piece joins that person's people cost
+    // and follows their share %; a piece with no employee set keeps the cents
+    // allocated via the pool.
+    const manual = splitsByLine.get(line.id);
+    if (manual && manual.length > 0) {
+      const pieces = applyPctSplits(
+        line.amountC,
+        manual.map((s) => ({ targetKind: s.targetKind, projectId: s.projectId, employeeId: s.employeeId, pct: s.pct }))
+      );
+      for (const p of pieces) {
+        if (p.targetKind === "project") addDirect(p.projectId as string, p.amountC, group, line.supplier);
+        else if (p.targetKind === "staff") {
+          if (p.employeeId) addToMap(peopleSums, p.employeeId, p.amountC);
+          else poolC += p.amountC;
+        } else if (p.targetKind === "overhead") poolC += p.amountC;
+        else splitExcludedC += p.amountC;
+      }
+      continue;
+    }
+
+    // Rules are explicit user config too, so they beat the automatic payee
+    // match — a saved split on a recurring staff payment keeps applying even
+    // though the payee alias would otherwise take the whole line.
+    const rule = firstMatchingRule(input.rules, {
+      supplier: line.supplier,
+      description: line.description,
+      glCode: line.glCode,
+      txnDate: line.txnDate,
+    });
+    if (rule) {
+      for (const p of applyRuleSplits(line.amountC, rule)) {
+        if (p.targetKind === "project") addDirect(p.projectId as string, p.amountC, group, line.supplier);
+        else if (p.targetKind === "staff" && p.employeeId) addToMap(peopleSums, p.employeeId, p.amountC);
+        else poolC += p.amountC;
+      }
+      continue;
+    }
+
     // People lines follow the person regardless of GL treatment.
     if (line.employeeId !== null) {
       addToMap(peopleSums, line.employeeId, line.amountC);
@@ -251,35 +292,6 @@ export function computePeriod(input: PeriodInput): PeriodResult {
         amountC: line.amountC,
         estimated: false,
       });
-      continue;
-    }
-
-    const group = groupOf(line.glCode);
-    const manual = splitsByLine.get(line.id);
-    if (manual && manual.length > 0) {
-      const pieces = applyPctSplits(
-        line.amountC,
-        manual.map((s) => ({ targetKind: s.targetKind, projectId: s.projectId, pct: s.pct }))
-      );
-      for (const p of pieces) {
-        if (p.targetKind === "project") addDirect(p.projectId as string, p.amountC, group, line.supplier);
-        else if (p.targetKind === "overhead") poolC += p.amountC;
-        else splitExcludedC += p.amountC;
-      }
-      continue;
-    }
-
-    const rule = firstMatchingRule(input.rules, {
-      supplier: line.supplier,
-      description: line.description,
-      glCode: line.glCode,
-      txnDate: line.txnDate,
-    });
-    if (rule) {
-      for (const p of applyRuleSplits(line.amountC, rule)) {
-        if (p.targetKind === "project") addDirect(p.projectId as string, p.amountC, group, line.supplier);
-        else poolC += p.amountC;
-      }
       continue;
     }
 

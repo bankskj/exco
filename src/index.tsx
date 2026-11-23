@@ -2708,8 +2708,16 @@ app.get("/app/costs", async (c) => {
     listEmployees(db),
   ]);
   const targetLabel = new Map(targets.map((t) => [t.id, t.label]));
-  const splitTargetLabel = (s: { targetKind: BillingTargetKind; projectId: string | null }) =>
-    s.targetKind === "overhead" ? "Shared Overhead" : s.targetKind === "excluded" ? "Excluded" : targetLabel.get(s.projectId ?? "") ?? "project";
+  const staffNameOf = new Map(employees.map((e: { id: string; name: string }) => [e.id, e.name]));
+  const selectTargets = [...targets, ...employees.map((e: { id: string; name: string }) => ({ id: `staff:${e.id}`, label: `Staff: ${e.name}`, clientId: "" }))];
+  const splitTargetLabel = (s: { targetKind: BillingTargetKind; projectId: string | null; employeeId?: string | null }) =>
+    s.targetKind === "overhead"
+      ? "Shared Overhead"
+      : s.targetKind === "excluded"
+        ? "Excluded"
+        : s.targetKind === "staff"
+          ? `Staff: ${staffNameOf.get(s.employeeId ?? "") ?? "?"}`
+          : targetLabel.get(s.projectId ?? "") ?? "project";
   const classify = (l: CostLineView): { tab: CostInboxTab; target: string; ruleName: string | null } => {
     if (l.treatment === "excluded") return { tab: "excluded", target: "Excluded (account treatment)", ruleName: null };
     if (l.employeeId) return { tab: "assigned", target: `Staff: ${l.employeeName ?? "?"} — via share %`, ruleName: null };
@@ -2754,12 +2762,22 @@ app.get("/app/costs", async (c) => {
       tab={tab}
       counts={counts}
       lines={rows}
-      projects={targets}
+      projects={selectTargets}
       staffOptions={employees.map((e: { id: string; name: string }) => ({ id: e.id, name: e.name }))}
       openSplit={c.req.query("split") ?? null}
     />,
   );
 });
+
+/** Parse a target select value: projectId | "overhead" | "excluded" | "staff:<employeeId>". */
+const parseSplitTarget = (target: string, pct: number): { targetKind: BillingTargetKind; projectId: string | null; employeeId: string | null; pct: number } =>
+  target === "overhead"
+    ? { targetKind: "overhead", projectId: null, employeeId: null, pct }
+    : target === "excluded"
+      ? { targetKind: "excluded", projectId: null, employeeId: null, pct }
+      : target.startsWith("staff:")
+        ? { targetKind: "staff", projectId: null, employeeId: target.slice(6), pct }
+        : { targetKind: "project", projectId: target, employeeId: null, pct };
 
 const costsBack = (c: any, b: Record<string, any>, extra = "") =>
   c.redirect(`/app/costs?p=${String(b.p ?? "month")}&tab=${String(b.tab ?? "unassigned")}${extra}`);
@@ -2769,12 +2787,7 @@ app.post("/app/costs/assign", async (c) => {
   const ids = (Array.isArray(b.ids) ? b.ids : b.ids ? [b.ids] : []).map(String);
   const target = String(b.target ?? "");
   if (!ids.length || !target) return costsBack(c, b);
-  const split =
-    target === "overhead"
-      ? { targetKind: "overhead" as const, projectId: null, pct: 100 }
-      : target === "excluded"
-        ? { targetKind: "excluded" as const, projectId: null, pct: 100 }
-        : { targetKind: "project" as const, projectId: target, pct: 100 };
+  const split = parseSplitTarget(target, 100);
   const actor = (await getActor(c)) ?? "";
   try {
     for (const id of ids) await setCostSplits(c.env.DB, id, [split], actor);
@@ -2795,24 +2808,48 @@ app.post("/app/costs/assign", async (c) => {
 app.post("/app/costs/split", async (c) => {
   const b = await c.req.parseBody();
   const id = String(b.id ?? "");
-  const splits: { targetKind: BillingTargetKind; projectId: string | null; pct: number }[] = [];
+  const splits: { targetKind: BillingTargetKind; projectId: string | null; employeeId: string | null; pct: number }[] = [];
   for (let i = 0; i < 12; i++) {
     const target = String(b[`split_target_${i}`] ?? "");
     const pct = parseMoney(String(b[`split_pct_${i}`] ?? "").trim() || "0");
     if (!target || !(pct > 0)) continue;
-    splits.push(
-      target === "overhead"
-        ? { targetKind: "overhead", projectId: null, pct }
-        : target === "excluded"
-          ? { targetKind: "excluded", projectId: null, pct }
-          : { targetKind: "project", projectId: target, pct },
-    );
+    splits.push(parseSplitTarget(target, pct));
   }
+  const actor = (await getActor(c)) ?? "";
   try {
-    await setCostSplits(c.env.DB, id, splits, (await getActor(c)) ?? "");
+    await setCostSplits(c.env.DB, id, splits, actor);
   } catch (e) {
     if (e instanceof BillingError) return costsBack(c, b, `&err=${encodeURIComponent(e.message)}`);
     throw e;
+  }
+  // "Save as rule": turn the entered legs into a percent rule on this supplier
+  // and open it in the editor for review.
+  if (b.save_rule === "1" && splits.length) {
+    const line = await c.env.DB.prepare("SELECT supplier FROM cost_lines WHERE id = ?").bind(id).first<{ supplier: string | null }>();
+    if (line?.supplier) {
+      const rule: CostRule = {
+        id: crypto.randomUUID(),
+        name: `${line.supplier} split`,
+        priority: 100,
+        supplierMatch: line.supplier,
+        descriptionMatch: null,
+        glCode: null,
+        mode: "percent",
+        effectiveFrom: null,
+        effectiveTo: null,
+        active: true,
+        splits: splits
+          .filter((x) => x.targetKind !== "excluded")
+          .map((x) => ({ targetKind: x.targetKind as "project" | "overhead" | "staff", projectId: x.projectId, employeeId: x.employeeId, pct: x.pct, fixedC: null, isRemainder: false })),
+      };
+      try {
+        await saveRule(c.env.DB, rule, actor);
+        return c.redirect(`/app/costs/rules?edit=${rule.id}`);
+      } catch (e) {
+        if (e instanceof BillingError) return costsBack(c, b, `&err=${encodeURIComponent(`Split saved, but the rule was not: ${e.message}`)}`);
+        throw e;
+      }
+    }
   }
   return costsBack(c, b);
 });
@@ -2847,14 +2884,18 @@ const ruleToEditing = (r: CostRule): CostRuleEditing => ({
   active: r.active,
   effectiveFrom: r.effectiveFrom,
   effectiveTo: r.effectiveTo,
-  splits: r.splits.map((s) => ({ projectId: s.projectId, pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
+  splits: r.splits.map((s) => ({ projectId: s.projectId, employeeId: s.employeeId, pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
 });
 
 app.get("/app/costs/rules", async (c) => {
   const db = c.env.DB;
-  const [rules, targets] = await Promise.all([listRules(db), billingTargetOptions(db)]);
+  const [rules, targets, employees] = await Promise.all([listRules(db), billingTargetOptions(db), listEmployees(db)]);
+  const staffName = new Map(employees.map((e: { id: string; name: string }) => [e.id, e.name]));
+  // Staff ride in the same target list the selects render (value "staff:<id>").
+  const selectTargets = [...targets, ...employees.map((e: { id: string; name: string }) => ({ id: `staff:${e.id}`, label: `Staff: ${e.name}`, clientId: "" }))];
   const targetLabel = new Map(targets.map((t) => [t.id, t.label]));
-  const labelOf = (projectId: string | null) => (projectId === null ? "Shared Overhead" : targetLabel.get(projectId) ?? "project");
+  const labelOf = (projectId: string | null, employeeId?: string | null) =>
+    employeeId ? `Staff: ${staffName.get(employeeId) ?? "?"}` : projectId === null ? "Shared Overhead" : targetLabel.get(projectId) ?? "project";
   const listRows: CostRuleListRow[] = rules.map((r) => ({
     id: r.id,
     name: r.name,
@@ -2866,7 +2907,7 @@ app.get("/app/costs/rules", async (c) => {
     active: r.active,
     effectiveFrom: r.effectiveFrom,
     effectiveTo: r.effectiveTo,
-    splits: r.splits.map((s) => ({ label: labelOf(s.projectId), pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
+    splits: r.splits.map((s) => ({ label: labelOf(s.projectId, s.employeeId), pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })),
   }));
   const edit = c.req.query("edit") ?? null;
   let editing: CostRuleEditing | null = null;
@@ -2885,10 +2926,26 @@ app.get("/app/costs/rules", async (c) => {
       active: true,
       effectiveFrom: null,
       effectiveTo: null,
-      splits: target ? [{ projectId: target === "overhead" || target === "excluded" ? null : target, pct: 100, fixedC: null, isRemainder: false }] : [],
+      splits: target
+        ? [(() => {
+            const t = parseSplitTarget(target, 100);
+            return { projectId: t.projectId, employeeId: t.employeeId, pct: 100, fixedC: null, isRemainder: false };
+          })()]
+        : [],
     };
     if (supplier) {
-      editingRule = { ...editing, id: "preview", splits: editing.splits.map((s) => ({ targetKind: s.projectId === null ? "overhead" : "project", projectId: s.projectId, pct: s.pct, fixedC: s.fixedC, isRemainder: s.isRemainder })) };
+      editingRule = {
+        ...editing,
+        id: "preview",
+        splits: editing.splits.map((s) => ({
+          targetKind: s.employeeId ? ("staff" as const) : s.projectId === null ? ("overhead" as const) : ("project" as const),
+          projectId: s.projectId,
+          employeeId: s.employeeId,
+          pct: s.pct,
+          fixedC: s.fixedC,
+          isRemainder: s.isRemainder,
+        })),
+      };
     }
   } else if (edit) {
     const r = rules.find((x) => x.id === edit) ?? null;
@@ -2905,10 +2962,10 @@ app.get("/app/costs/rules", async (c) => {
       supplier: p.line.supplier,
       description: p.line.description,
       amountC: p.line.amountC,
-      pieces: p.pieces.map((piece) => ({ label: piece.targetKind === "overhead" ? "Shared Overhead" : labelOf(piece.projectId), amountC: piece.amountC })),
+      pieces: p.pieces.map((piece) => ({ label: piece.targetKind === "overhead" ? "Shared Overhead" : labelOf(piece.projectId, piece.employeeId), amountC: piece.amountC })),
     }));
   }
-  return c.html(<CostRulesPage rules={listRows} editing={editing} projects={targets} preview={preview} error={c.req.query("err") ?? null} />);
+  return c.html(<CostRulesPage rules={listRows} editing={editing} projects={selectTargets} preview={preview} error={c.req.query("err") ?? null} />);
 });
 
 app.post("/app/costs/rule", async (c) => {
@@ -2920,9 +2977,11 @@ app.post("/app/costs/rule", async (c) => {
     if (!target) continue;
     const pctRaw = String(b[`split_pct_${i}`] ?? "").trim();
     const fixedRaw = String(b[`split_fixed_${i}`] ?? "").trim();
+    const t = parseSplitTarget(target, 0);
     splits.push({
-      targetKind: target === "overhead" ? "overhead" : "project",
-      projectId: target === "overhead" ? null : target,
+      targetKind: t.targetKind === "excluded" ? "overhead" : (t.targetKind as "project" | "overhead" | "staff"),
+      projectId: t.projectId,
+      employeeId: t.employeeId,
       pct: pctRaw === "" ? null : parseMoney(pctRaw),
       fixedC: fixedRaw === "" ? null : Math.round(parseMoney(fixedRaw) * 100),
       isRemainder: String(b.remainder ?? "") === String(i),

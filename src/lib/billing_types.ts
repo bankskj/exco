@@ -8,7 +8,9 @@
 
 export type Treatment = "revenue" | "people" | "direct" | "overhead" | "excluded";
 export type OverheadBasis = "revenue" | "direct_cost" | "fixed";
-export type TargetKind = "project" | "overhead" | "excluded";
+/** Where a split piece lands: a project, the pool, excluded, or a STAFF
+ * MEMBER (the piece joins that person's people cost and follows their share %). */
+export type TargetKind = "project" | "overhead" | "excluded" | "staff";
 
 export type BillingClient = {
   id: string;
@@ -91,14 +93,16 @@ export type StaffAllocation = {
 
 export type CostSplit = {
   costLineId: string;
-  targetKind: TargetKind; // project|overhead|excluded
+  targetKind: TargetKind; // project|overhead|excluded|staff
   projectId: string | null;
+  employeeId: string | null; // set when targetKind = staff
   pct: number;
 };
 
 export type CostRuleSplit = {
-  targetKind: "project" | "overhead";
+  targetKind: "project" | "overhead" | "staff";
   projectId: string | null;
+  employeeId: string | null; // set when targetKind = staff
   pct: number | null; // percent mode
   fixedC: number | null; // fixed mode
   isRemainder: boolean;

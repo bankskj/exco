@@ -226,8 +226,9 @@ const mapRule = (r: any, splits: any[]): CostRule => ({
   effectiveTo: r.effective_to ?? null,
   active: !!r.active,
   splits: splits.map((s) => ({
-    targetKind: s.target_kind as "project" | "overhead",
+    targetKind: s.target_kind as "project" | "overhead" | "staff",
     projectId: s.project_id ?? null,
+    employeeId: s.employee_id ?? null,
     pct: s.pct ?? null,
     fixedC: s.fixed_c ?? null,
     isRemainder: !!s.is_remainder,
@@ -263,9 +264,9 @@ export async function loadPeriodInputs(db: D1Database, periods: string[]): Promi
     q("SELECT code, name, kind, report_group, treatment, sort_order FROM gl_categories WHERE active = 1 ORDER BY sort_order, code"),
     q(`SELECT id, period, txn_date, source, doc_number, doc_type, contact_name, client_id, project_id, gl_code, description, amount_c FROM revenue_lines WHERE period IN (${marks}) ORDER BY txn_date, id`, ...sorted),
     q(`SELECT id, period, txn_date, source, doc_kind, supplier, reference, description, gl_code, employee_id, amount_c FROM cost_lines WHERE period IN (${marks}) ORDER BY txn_date, id`, ...sorted),
-    q(`SELECT l.period, s.cost_line_id, s.target_kind, s.project_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period IN (${marks})`, ...sorted),
+    q(`SELECT l.period, s.cost_line_id, s.target_kind, s.project_id, s.employee_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period IN (${marks})`, ...sorted),
     q("SELECT id, name, priority, supplier_match, description_match, gl_code, mode, effective_from, effective_to, active FROM cost_rules WHERE active = 1 ORDER BY priority, name"),
-    q("SELECT rule_id, target_kind, project_id, pct, fixed_c, is_remainder FROM cost_rule_splits WHERE rule_id IN (SELECT id FROM cost_rules WHERE active = 1) ORDER BY id"),
+    q("SELECT rule_id, target_kind, project_id, employee_id, pct, fixed_c, is_remainder FROM cost_rule_splits WHERE rule_id IN (SELECT id FROM cost_rules WHERE active = 1) ORDER BY id"),
     q("SELECT employee_id, period, target_kind, project_id, pct FROM staff_allocations WHERE period <= ? ORDER BY period, employee_id", maxPeriod),
     q(`SELECT project_id, period, revenue_c, cost_c FROM project_budgets WHERE period IN (${marks})`, ...sorted),
     q(`SELECT period, client_id, pct FROM overhead_fixed_shares WHERE period IN (${marks})`, ...sorted),
@@ -306,6 +307,7 @@ export async function loadPeriodInputs(db: D1Database, periods: string[]): Promi
     costLineId: String(s.cost_line_id),
     targetKind: s.target_kind as TargetKind,
     projectId: s.project_id ?? null,
+    employeeId: s.employee_id ?? null,
     pct: Number(s.pct),
   }));
   const budgetsBy = byPeriod(budgetRows, (b): ProjectBudget => ({
@@ -915,14 +917,14 @@ export async function listCostLinesForPeriods(db: D1Database, periods: string[])
     .bind(...periods)
     .all<any>();
   const splitRows = ((await db
-    .prepare(`SELECT s.cost_line_id, s.target_kind, s.project_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period IN (${marks})`)
+    .prepare(`SELECT s.cost_line_id, s.target_kind, s.project_id, s.employee_id, s.pct FROM cost_splits s JOIN cost_lines l ON l.id = s.cost_line_id WHERE l.period IN (${marks})`)
     .bind(...periods)
     .all()).results ?? []) as any[];
   const splitsByLine = new Map<string, CostSplit[]>();
   for (const s of splitRows) {
     const key = String(s.cost_line_id);
     const list = splitsByLine.get(key) ?? [];
-    list.push({ costLineId: key, targetKind: s.target_kind as TargetKind, projectId: s.project_id ?? null, pct: Number(s.pct) });
+    list.push({ costLineId: key, targetKind: s.target_kind as TargetKind, projectId: s.project_id ?? null, employeeId: s.employee_id ?? null, pct: Number(s.pct) });
     splitsByLine.set(key, list);
   }
   return (results ?? []).map((r) => ({
@@ -950,7 +952,7 @@ export async function setRevenueProjectOverride(db: D1Database, lineId: string, 
   ]);
 }
 
-export type CostSplitInput = { targetKind: TargetKind; projectId: string | null; pct: number };
+export type CostSplitInput = { targetKind: TargetKind; projectId: string | null; employeeId?: string | null; pct: number };
 
 /** Replace a cost line's manual splits; empty array clears them. */
 export async function setCostSplits(db: D1Database, costLineId: string, splits: CostSplitInput[], actor: string): Promise<void> {
@@ -960,10 +962,14 @@ export async function setCostSplits(db: D1Database, costLineId: string, splits: 
   if (splits.length) {
     const sum = splits.reduce((s, x) => s + x.pct, 0);
     if (Math.abs(sum - 100) > 0.01) throw new BillingError(`Split percentages must total 100 — got ${sum}`, 422);
+    for (const x of splits) {
+      if (x.targetKind === "staff" && !x.employeeId) throw new BillingError("A staff split leg needs a staff member", 422);
+      if (x.targetKind === "project" && !x.projectId) throw new BillingError("A project split leg needs a project", 422);
+    }
   }
   await db.batch([
     db.prepare("DELETE FROM cost_splits WHERE cost_line_id = ?").bind(costLineId),
-    ...splits.map((s) => db.prepare("INSERT INTO cost_splits (id, cost_line_id, target_kind, project_id, pct) VALUES (?, ?, ?, ?, ?)").bind(uuid(), costLineId, s.targetKind, s.projectId, s.pct)),
+    ...splits.map((s) => db.prepare("INSERT INTO cost_splits (id, cost_line_id, target_kind, project_id, employee_id, pct) VALUES (?, ?, ?, ?, ?, ?)").bind(uuid(), costLineId, s.targetKind, s.projectId, s.employeeId ?? null, s.pct)),
     auditStmt(db, actor, "cost_splits", costLineId, "set", null, { splits }),
   ]);
 }
@@ -1165,7 +1171,7 @@ export async function importCsv(db: D1Database, kind: "revenue" | "cost", text: 
 
 export async function listRules(db: D1Database): Promise<CostRule[]> {
   const rules = ((await db.prepare("SELECT id, name, priority, supplier_match, description_match, gl_code, mode, effective_from, effective_to, active FROM cost_rules ORDER BY priority, name").all()).results ?? []) as any[];
-  const splits = ((await db.prepare("SELECT rule_id, target_kind, project_id, pct, fixed_c, is_remainder FROM cost_rule_splits ORDER BY id").all()).results ?? []) as any[];
+  const splits = ((await db.prepare("SELECT rule_id, target_kind, project_id, employee_id, pct, fixed_c, is_remainder FROM cost_rule_splits ORDER BY id").all()).results ?? []) as any[];
   const byRule = new Map<string, any[]>();
   for (const s of splits) {
     const list = byRule.get(String(s.rule_id)) ?? [];
@@ -1192,7 +1198,7 @@ export async function saveRule(db: D1Database, rule: CostRule, actor: string): P
     ).bind(id, rule.name, rule.priority, rule.supplierMatch, rule.descriptionMatch, rule.glCode, rule.mode, rule.effectiveFrom, rule.effectiveTo, rule.active ? 1 : 0),
     db.prepare("DELETE FROM cost_rule_splits WHERE rule_id = ?").bind(id),
     ...rule.splits.map((s) =>
-      db.prepare("INSERT INTO cost_rule_splits (id, rule_id, target_kind, project_id, pct, fixed_c, is_remainder) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(uuid(), id, s.targetKind, s.projectId ?? null, s.pct ?? null, s.fixedC ?? null, s.isRemainder ? 1 : 0),
+      db.prepare("INSERT INTO cost_rule_splits (id, rule_id, target_kind, project_id, employee_id, pct, fixed_c, is_remainder) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(uuid(), id, s.targetKind, s.projectId ?? null, s.employeeId ?? null, s.pct ?? null, s.fixedC ?? null, s.isRemainder ? 1 : 0),
     ),
     auditStmt(db, actor, "cost_rule", id, before ? "update" : "create", before, rule),
   ]);

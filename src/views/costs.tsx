@@ -231,8 +231,14 @@ export const CostInboxPage: FC<CostInboxPageProps> = ({
                                     </div>
                                   ))}
                                 </div>
-                                <button class="btn btn-sm" type="submit" style="margin-top:8px">Save split</button>
-                                <span class="muted" style="font-size:12px;margin-left:10px">Percentages must total 100; leave unused lines blank.</span>
+                                <div class="row" style="gap:12px;align-items:center;margin-top:8px">
+                                  <button class="btn btn-sm" type="submit">Save split</button>
+                                  <label style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px">
+                                    <input type="checkbox" name="save_rule" value="1" style="width:auto" /> Save as rule for{" "}
+                                    {l.supplier ?? "this supplier"}
+                                  </label>
+                                  <span class="muted" style="font-size:12px">Percentages must total 100; leave unused lines blank. Staff legs follow that person's share %.</span>
+                                </div>
                               </form>
                             </div>
                           )}
@@ -306,8 +312,8 @@ export type CostRuleEditing = {
   active: boolean;
   effectiveFrom: string | null;
   effectiveTo: string | null;
-  /** projectId null = Shared Overhead. */
-  splits: { projectId: string | null; pct: number | null; fixedC: number | null; isRemainder: boolean }[];
+  /** projectId null + employeeId null = Shared Overhead; employeeId set = a staff leg. */
+  splits: { projectId: string | null; employeeId: string | null; pct: number | null; fixedC: number | null; isRemainder: boolean }[];
 };
 
 export type CostRulePreviewRow = {
@@ -464,7 +470,7 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
                 <tbody>
                   {Array.from({ length: 12 }, (_, i) => i).map((i) => {
                     const s = editing.splits[i] ?? null;
-                    const sel = s ? s.projectId ?? "overhead" : "";
+                    const sel = s ? (s.employeeId ? `staff:${s.employeeId}` : s.projectId ?? "overhead") : "";
                     return (
                       <tr>
                         <td style="padding:3px 14px 3px 0">

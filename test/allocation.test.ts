@@ -235,15 +235,54 @@ describe("billing_rules", () => {
       splits: [{ targetKind: "project", projectId: "p1", pct: null, fixedC: 100_000, isRemainder: false }],
     });
     expect(applyRuleSplits(300_000, r)).toEqual([
-      { targetKind: "project", projectId: "p1", amountC: 100_000 },
-      { targetKind: "overhead", projectId: null, amountC: 200_000 },
+      { targetKind: "project", projectId: "p1", employeeId: null, amountC: 100_000 },
+      { targetKind: "overhead", projectId: null, employeeId: null, amountC: 200_000 },
     ]);
   });
 
   it("applyRuleSplits fixed: negative amount scales pro rata, remainder gets 0", () => {
     expect(applyRuleSplits(-50_000, hetznerRule)).toEqual([
-      { targetKind: "project", projectId: "pr-axiomatic", amountC: -50_000 },
+      { targetKind: "project", projectId: "pr-axiomatic", employeeId: null, amountC: -50_000 },
     ]);
+  });
+
+  it("staff split piece joins the person's people cost and follows their share %", () => {
+    // R10 000 batch line split 60% to Staff A (100% ABF) and 40% to Devco direct.
+    const input = baseInput();
+    input.costLines.push(cost({ id: "batch", glCode: "310", supplier: "DEV BATCH EFT", amountC: 10_000_00 }));
+    input.costSplits.push(
+      { costLineId: "batch", targetKind: "staff", projectId: null, employeeId: "staff-a", pct: 60 },
+      { costLineId: "batch", targetKind: "project", projectId: "pr-devco", employeeId: null, pct: 40 },
+    );
+    const r = computePeriod(input);
+    const abf = r.clients.find((c) => c.clientId === "cl-abf")!;
+    // Staff A's month is now 60 000 00 (salary) + 6 000 00 (split piece), all to ABF.
+    expect(abf.peopleC).toBe(66_000_00);
+    const devco = r.clients.find((c) => c.clientId === "cl-devco")!;
+    expect(devco.directC).toBe(4_000_00);
+    expect(r.reconciliation.ok).toBe(true);
+  });
+
+  it("a rule with a staff leg beats the automatic payee match", () => {
+    // Amit-style: the line is payee-matched to Staff B, but a saved rule splits
+    // it 50% ABF direct / 50% to Staff B as people cost.
+    const input = baseInput();
+    input.costLines.push(cost({ id: "amit", glCode: "310", supplier: "Development Services - Amit", employeeId: "staff-b", amountC: 8_000_00 }));
+    input.rules.push({
+      id: "r-amit", name: "Amit split", priority: 5, supplierMatch: "Amit", descriptionMatch: null, glCode: null,
+      mode: "percent", effectiveFrom: null, effectiveTo: null, active: true,
+      splits: [
+        { targetKind: "project", projectId: "pr-abf", employeeId: null, pct: 50, fixedC: null, isRemainder: false },
+        { targetKind: "staff", projectId: null, employeeId: "staff-b", pct: 50, fixedC: null, isRemainder: false },
+      ],
+    });
+    const r = computePeriod(input);
+    const abf = r.clients.find((c) => c.clientId === "cl-abf")!;
+    expect(abf.directBySupplier.find((s) => s.supplier === "Development Services - Amit")?.amountC).toBe(4_000_00);
+    // Staff B's cost is 40 000 00 (salary) + 4 000 00 (rule piece): 50% to Axiomatic, rest to General.
+    const axio = r.clients.find((c) => c.clientId === "cl-axiomatic")!;
+    expect(axio.peopleC).toBe(22_000_00);
+    expect(r.reconciliation.ok).toBe(true);
   });
 });
 
