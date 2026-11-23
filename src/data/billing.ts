@@ -360,11 +360,15 @@ export async function getSnapshots(db: D1Database, periods: string[]): Promise<M
 // Sync
 // ---------------------------------------------------------------------------
 
-/** gl_categories defaults for a code the chart hasn't been mapped for yet. */
-function provisionalCategory(code: string, kind: "revenue" | "cost"): { group: string; treatment: Treatment } {
-  if (kind === "revenue") return { group: "Unmapped", treatment: "revenue" };
-  if (/^4\d\d$/.test(code)) return { group: "Running costs", treatment: "overhead" };
-  return { group: "Unmapped", treatment: "overhead" };
+/** gl_categories defaults for a code the chart hasn't been mapped for yet.
+ * The Xero account CLASS is authoritative: balance-sheet accounts (asset /
+ * liability / equity) are never revenue or operating cost — a director's loan
+ * repayment or a VAT payment is a balance-sheet movement, excluded outright. */
+function provisionalCategory(code: string, kind: "revenue" | "cost", cls: string | null = null): { kind: "revenue" | "cost"; group: string; treatment: Treatment } {
+  if (cls === "ASSET" || cls === "LIABILITY" || cls === "EQUITY") return { kind: "cost", group: "Balance sheet", treatment: "excluded" };
+  if (cls === "REVENUE" || (cls === null && kind === "revenue")) return { kind: "revenue", group: "Unmapped", treatment: "revenue" };
+  if (/^4\d\d$/.test(code)) return { kind: "cost", group: "Running costs", treatment: "overhead" };
+  return { kind: "cost", group: "Unmapped", treatment: "overhead" };
 }
 
 /** Case-insensitive staff-payee test against supplier, then reference, then description. */
@@ -413,24 +417,77 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
   const glKind = new Map<string, string>(glRows.map((r) => [String(r.code), String(r.kind)]));
   await runBatches(db, accounts.filter((a) => glKind.has(a.code)).map((a) => db.prepare("UPDATE gl_categories SET name = ? WHERE code = ?").bind(a.name, a.code)));
 
+  // Self-heal categories: the chart's class is authoritative for balance-sheet
+  // accounts, and for expense accounts that were auto-created as revenue (an
+  // expense refund arriving as a RECEIVE line does not make the account revenue).
+  const heals: D1PreparedStatement[] = [];
+  for (const a of accounts) {
+    if (!glKind.has(a.code)) continue;
+    if (a.cls === "ASSET" || a.cls === "LIABILITY" || a.cls === "EQUITY") {
+      heals.push(db.prepare("UPDATE gl_categories SET kind='cost', treatment='excluded', report_group='Balance sheet' WHERE code = ? AND NOT (kind='cost' AND treatment='excluded')").bind(a.code));
+      glKind.set(a.code, "cost");
+    } else if (a.cls === "EXPENSE" && glKind.get(a.code) === "revenue") {
+      const grp = /^4\d\d$/.test(a.code) ? "Running costs" : "Unmapped";
+      heals.push(db.prepare("UPDATE gl_categories SET kind='cost', report_group = ?, treatment='overhead' WHERE code = ? AND kind='revenue'").bind(grp, a.code));
+      glKind.set(a.code, "cost");
+    }
+  }
+  await runBatches(db, heals);
+
   const docs = await fetchBillingDocs(accessToken, tenantId, sinceISO, modifiedSince);
 
-  // Unknown GL codes referenced by rows -> provisional categories.
+  // Unknown GL codes referenced by rows -> provisional categories (class-aware).
   const newCats: D1PreparedStatement[] = [];
   const addCat = (code: string, kind: "revenue" | "cost") => {
     if (glKind.has(code)) return;
-    glKind.set(code, kind);
-    const p = provisionalCategory(code, kind);
+    const acct = acctByCode.get(code);
+    const p = provisionalCategory(code, kind, acct?.cls ?? null);
+    glKind.set(code, p.kind);
     newCats.push(
-      db.prepare("INSERT OR IGNORE INTO gl_categories (code, name, kind, report_group, treatment, sort_order) VALUES (?, ?, ?, ?, ?, 900)").bind(code, acctByCode.get(code)?.name ?? "", kind, p.group, p.treatment),
+      db.prepare("INSERT OR IGNORE INTO gl_categories (code, name, kind, report_group, treatment, sort_order) VALUES (?, ?, ?, ?, ?, 900)").bind(code, acct?.name ?? "", p.kind, p.group, p.treatment),
     );
   };
   for (const r of docs.revenue) if (r.glCode) addCat(r.glCode, "revenue");
   for (const r of docs.costs) if (r.glCode) addCat(r.glCode, "cost");
   await runBatches(db, newCats);
 
-  // RECEIVE bank txns: keep only lines coded to revenue accounts.
-  const revenueRows = docs.revenue.filter((r) => r.docType !== "RECEIVE" || (r.glCode != null && glKind.get(r.glCode) === "revenue"));
+  // Treatment map AFTER heals + inserts, to route RECEIVE lines.
+  const glNow = ((await db.prepare("SELECT code, kind, treatment FROM gl_categories").all()).results ?? []) as any[];
+  const glTreat = new Map<string, { kind: string; treatment: string }>(glNow.map((r) => [String(r.code), { kind: String(r.kind), treatment: String(r.treatment) }]));
+
+  // RECEIVE bank txns route by account class: revenue accounts stay revenue;
+  // expense accounts become refunds (negative cost lines); balance-sheet
+  // movements (loans, VAT, transfers) are dropped — they are not revenue.
+  const revenueRows: typeof docs.revenue = [];
+  const refundRows: typeof docs.costs = [];
+  for (const r of docs.revenue) {
+    if (r.docType !== "RECEIVE") {
+      revenueRows.push(r);
+      continue;
+    }
+    const cat = r.glCode ? glTreat.get(r.glCode) : undefined;
+    if (!cat || cat.kind === "revenue") {
+      if (cat) revenueRows.push(r);
+      continue;
+    }
+    if (cat.treatment === "excluded") continue; // balance sheet — drop
+    refundRows.push({
+      sourceRef: r.sourceRef,
+      xeroDocId: r.xeroDocId,
+      docKind: "refund",
+      txnDate: r.txnDate,
+      supplier: r.contactName,
+      reference: r.docNumber,
+      description: r.description,
+      glCode: r.glCode,
+      amountC: -r.amountC,
+      currency: r.currency,
+      fxRate: r.fxRate,
+      amountFxC: r.amountFxC === null ? null : -r.amountFxC,
+      status: r.status,
+    });
+  }
+  docs.costs.push(...refundRows);
 
   // Resolution maps.
   const contacts = ((await db.prepare("SELECT client_id, xero_contact_id, contact_name FROM client_contacts").all()).results ?? []) as any[];
@@ -519,9 +576,37 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
     await setMeta(db, "billing_postclose_warning", (prev ? prev + "\n" : "") + lines.join("\n"));
   }
 
+  // Heal previously mis-filed RECEIVE lines now that account classes are known:
+  // balance-sheet rows are dropped, expense refunds move to cost_lines (negated).
+  let healedCount = 0;
+  {
+    const notClosed2 = closedList.length ? ` AND r.period NOT IN (${closedList.map(() => "?").join(",")})` : "";
+    const bad = ((await db
+      .prepare(
+        `SELECT r.id, r.period, r.txn_date, r.source_ref, r.xero_doc_id, r.contact_name, r.doc_number, r.description, r.gl_code, r.amount_c, r.currency, r.fx_rate, r.amount_fx_c, g.treatment FROM revenue_lines r JOIN gl_categories g ON g.code = r.gl_code WHERE r.doc_type = 'RECEIVE' AND g.kind != 'revenue'${notClosed2}`,
+      )
+      .bind(...closedList)
+      .all()).results ?? []) as any[];
+    const fixes: D1PreparedStatement[] = [];
+    for (const r of bad) {
+      if (r.treatment !== "excluded") {
+        fixes.push(
+          db
+            .prepare(
+              "INSERT OR IGNORE INTO cost_lines (id, period, txn_date, source, source_ref, xero_doc_id, doc_kind, supplier, reference, description, gl_code, amount_c, currency, fx_rate, amount_fx_c) VALUES (?, ?, ?, 'xero', ?, ?, 'refund', ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(uuid(), r.period, r.txn_date, r.source_ref, r.xero_doc_id, r.contact_name, r.doc_number, r.description, r.gl_code, -Number(r.amount_c), r.currency, r.fx_rate, r.amount_fx_c == null ? null : -Number(r.amount_fx_c)),
+        );
+      }
+      fixes.push(db.prepare("DELETE FROM revenue_lines WHERE id = ?").bind(r.id));
+      healedCount++;
+    }
+    await runBatches(db, fixes);
+  }
+
   await setMeta(db, "billing_last_sync", syncStartedAt);
   await setMeta(db, "billing_sync_error", "");
-  return `billing: ${revCount} revenue line(s), ${costCount} cost line(s) upserted, ${removedCount} removed`;
+  return `billing: ${revCount} revenue line(s), ${costCount} cost line(s) upserted, ${removedCount} removed${healedCount ? `, ${healedCount} balance-sheet/refund line(s) re-filed` : ""}`;
 }
 
 // ---------------------------------------------------------------------------

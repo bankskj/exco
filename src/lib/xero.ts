@@ -771,7 +771,7 @@ export type XeroBillingRevenueRow = {
 export type XeroBillingCostRow = {
   sourceRef: string; // LineItemID (fallback: `${docId}:${index}` when missing)
   xeroDocId: string;
-  docKind: "bill" | "spend";
+  docKind: "bill" | "spend" | "refund";
   txnDate: string; // YYYY-MM-DD
   supplier: string | null; // Contact name
   reference: string | null;
