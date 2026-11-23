@@ -33,6 +33,15 @@ const ROW_SCRIPT = `(function(){
       tr.querySelectorAll('input[data-pct]').forEach(function(i){
         var v=parseFloat((i.value||'').replace(',','.'));
         if(isFinite(v))sum+=v;
+        // Live rand equivalent under the cell: % of the person's monthly cost.
+        var hint=i.parentElement&&i.parentElement.parentElement?i.parentElement.parentElement.querySelector('div[data-rand]'):null;
+        var cost=parseFloat(i.getAttribute('data-cost')||'0');
+        if(hint){
+          if(isFinite(v)&&v>0&&cost>0){
+            var r=Math.round(cost*v/100/100);
+            hint.textContent='R '+r.toLocaleString('en-ZA').replace(/,/g,' ');
+          } else { hint.innerHTML='&nbsp;'; }
+        }
       });
       var rem=Math.round((100-sum)*100)/100;
       var cell=tr.querySelector('td[data-rem]');
@@ -74,9 +83,10 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
           <div>
             <h1 style="margin-top:12px">Staff allocations</h1>
             <p class="muted" style="margin-top:0">
-              Where did each person's month go? Percentages per project; the remainder lands on the client's default
-              project via each person's default target.{" "}
-              <Info text="A row may total under 100% — the remainder follows the staff member's default target (general or overhead). Over 100% is an error and is rejected." />
+              Where did each person's month go? Every cell is a <strong>% of that person's monthly cost</strong> —
+              the rand it allocates shows underneath. The remainder lands on the client's default project via each
+              person's default target.{" "}
+              <Info text="A row may total under 100% — the remainder follows the staff member's default target (general or overhead). Over 100% is an error and is rejected. The rand values follow the month's actual payments (or the payroll estimate)." />
             </p>
           </div>
           <a class="btn btn-sm" style="margin-top:16px" href="/app/clients">← Clients</a>
@@ -135,27 +145,42 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
                         {s.estimated ? <span class="badge estimate" style="margin-left:8px">estimated</span> : null}
                       </td>
                       <td class="num muted">{R(s.costC)}</td>
-                      {columns.map((c) => (
-                        <td class="num">
+                      {columns.map((c) => {
+                        const pct = pctOf(s.employeeId, c.projectId);
+                        return (
+                          <td class="num">
+                            <span style="white-space:nowrap">
+                              <input
+                                name={`a::${s.employeeId}::${c.projectId}`}
+                                value={pctVal(pct)}
+                                size={3}
+                                inputmode="decimal"
+                                autocomplete="off"
+                                data-pct="1"
+                                data-cost={String(s.costC)}
+                              />
+                              <span class="muted" style="font-size:11px">%</span>
+                            </span>
+                            <div class="cellhint" data-rand="1">{pct > 0 ? R(Math.round((s.costC * pct) / 100)) : " "}</div>
+                          </td>
+                        );
+                      })}
+                      <td class="num">
+                        <span style="white-space:nowrap">
                           <input
-                            name={`a::${s.employeeId}::${c.projectId}`}
-                            value={pctVal(pctOf(s.employeeId, c.projectId))}
-                            size={4}
+                            name={`a::${s.employeeId}::overhead`}
+                            value={pctVal(overheadPct[s.employeeId] ?? 0)}
+                            size={3}
                             inputmode="decimal"
                             autocomplete="off"
                             data-pct="1"
+                            data-cost={String(s.costC)}
                           />
-                        </td>
-                      ))}
-                      <td class="num">
-                        <input
-                          name={`a::${s.employeeId}::overhead`}
-                          value={pctVal(overheadPct[s.employeeId] ?? 0)}
-                          size={4}
-                          inputmode="decimal"
-                          autocomplete="off"
-                          data-pct="1"
-                        />
+                          <span class="muted" style="font-size:11px">%</span>
+                        </span>
+                        <div class="cellhint" data-rand="1">
+                          {(overheadPct[s.employeeId] ?? 0) > 0 ? R(Math.round((s.costC * (overheadPct[s.employeeId] ?? 0)) / 100)) : " "}
+                        </div>
                       </td>
                       <td class={`num muted ${rem < 0 ? "neg" : ""}`} data-rem="1">{rem}%</td>
                     </tr>
