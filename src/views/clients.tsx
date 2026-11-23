@@ -92,7 +92,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
             <p class="muted" style="margin-top:0">
               Who makes us money? Revenue, people cost, direct cost and the overhead recovery per client —{" "}
               every cent of cost lands on exactly one line.{" "}
-              <Info text="People = allocated staff cost; Direct = supplier costs assigned to the client; Overhead = the shared pool recovered on the configured basis. Net = Revenue − People − Direct − Overhead." />
+              <Info text="People = allocated staff cost; Direct = supplier costs assigned to the client; Overhead = the shared pool recovered on the configured basis; Carry = a General Sales loss carried by the key accounts in proportion to revenue (General Sales gets the offsetting credit and nets zero). Net = Revenue − People − Direct − Overhead − Carry." />
             </p>
             <AsAt lastSync={lastSyncLabel} />
           </div>
@@ -184,6 +184,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                       <th>Contribution</th>
                       <th>Contr %</th>
                       <th>Overhead</th>
+                      <th title="General Sales loss carried by the key accounts, by revenue share">Carry</th>
                       <th>Net</th>
                       <th>Net %</th>
                       <th title="Net − (budget revenue − budget cost)">Budget var</th>
@@ -204,6 +205,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                           <td class={`num ${c.contributionC < 0 ? "neg" : ""}`}>{R(c.contributionC)}</td>
                           <td class={`num ${c.contributionPct != null && c.contributionPct < 0 ? "neg" : ""}`}>{pct1(c.contributionPct)}</td>
                           <td class="num">{R(c.overheadC)}</td>
+                          <td class={`num ${c.carryC < 0 ? "muted" : ""}`}>{c.carryC === 0 ? <span class="muted">—</span> : R(c.carryC)}</td>
                           <td class={`num ${c.netC < 0 ? "neg" : ""}`}>{R(c.netC)}</td>
                           <td class={`num ${c.netPct != null && c.netPct < 0 ? "neg" : ""}`}>{pct1(c.netPct)}</td>
                           <td class={`num ${bv != null && bv < 0 ? "neg" : ""}`}>{bv == null ? "—" : R(bv)}</td>
@@ -218,6 +220,9 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                       <td class={`num ${result.totals.contributionC < 0 ? "neg" : ""}`}>{R(result.totals.contributionC)}</td>
                       <td class="num">{pct1(netPctOf(result.totals.contributionC, result.totals.revenueC))}</td>
                       <td class="num">{R(result.totals.overheadC)}</td>
+                      <td class="num muted" title={result.carriedLossC ? `General Sales loss of ${R(result.carriedLossC)} redistributed — nets to zero` : undefined}>
+                        {result.carriedLossC ? `(${R(result.carriedLossC)})` : "—"}
+                      </td>
                       <td class={`num ${result.totals.netC < 0 ? "neg" : ""}`}>{R(result.totals.netC)}</td>
                       <td class="num">{pct1(netPctOf(result.totals.netC, result.totals.revenueC))}</td>
                       <td></td>
@@ -285,6 +290,7 @@ export type TrackerAggregate = {
   directC: number;
   contributionC: number;
   overheadC: number;
+  carryC: number;
   netC: number;
   budgetRevenueC: number | null;
   budgetCostC: number | null;
@@ -515,6 +521,7 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
               ) : null}
               {numRow("Contribution", (a) => a.contributionC, { negRed: true, strong: true })}
               {numRow("Overhead recovery", (a) => a.overheadC)}
+              {numRow("Carry (General Sales loss)", (a) => (a.carryC === 0 ? null : a.carryC))}
               {numRow("Net", (a) => a.netC, { negRed: true, strong: true })}
               <tr>
                 <td style="text-align:left">Net %</td>
@@ -641,6 +648,7 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
               {row("Direct", (a) => a.directC)}
               {row("Contribution", (a) => a.contributionC, true, true)}
               {row("Overhead recovery", (a) => a.overheadC)}
+              {row("Carry", (a) => (a.carryC === 0 ? null : a.carryC))}
               {row("Net", (a) => a.netC, true, true)}
               <tr>
                 <td style="text-align:left">Net %</td>

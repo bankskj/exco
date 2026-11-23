@@ -163,6 +163,8 @@ export type ProjectResult = {
   directBySupplier: SupplierAmount[];
   contributionC: number;
   overheadC: number;
+  /** Share of a General Sales loss carried by this project (negative on General Sales itself — the offsetting credit). */
+  carryC: number;
   netC: number;
   budgetRevenueC: number | null;
   budgetCostC: number | null;
@@ -183,6 +185,8 @@ export type ClientResult = {
   contributionC: number;
   contributionPct: number | null; // null when revenue is 0
   overheadC: number;
+  /** Share of a General Sales loss carried by this client (negative on General Sales — the offsetting credit). Nets to zero across clients. */
+  carryC: number;
   netC: number;
   netPct: number | null;
   budgetRevenueC: number | null;
@@ -216,8 +220,11 @@ export type PeriodResult = {
     directC: number;
     contributionC: number;
     overheadC: number;
+    carryC: number; // always 0 — carry is a redistribution
     netC: number;
   };
+  /** Magnitude of the General Sales loss redistributed this period (0 when General Sales breaks even or profits). */
+  carriedLossC: number;
   reconciliation: {
     /** Σ non-excluded cost lines + Σ payroll estimates. */
     costInC: number;

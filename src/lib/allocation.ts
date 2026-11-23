@@ -540,6 +540,7 @@ export function computePeriod(input: PeriodInput): PeriodResult {
         directBySupplier: sortedSuppliers(a.directBySupplier),
         contributionC,
         overheadC: a.overheadC,
+        carryC: 0,
         netC: contributionC - a.overheadC,
         budgetRevenueC: budget ? budget.revenueC : null,
         budgetCostC: budget ? budget.costC : null,
@@ -563,6 +564,7 @@ export function computePeriod(input: PeriodInput): PeriodResult {
       contributionC,
       contributionPct: revenueC !== 0 ? (contributionC / revenueC) * 100 : null,
       overheadC,
+      carryC: 0,
       netC,
       netPct: revenueC !== 0 ? (netC / revenueC) * 100 : null,
       budgetRevenueC: hasBudget ? budgetRevenueC : null,
@@ -571,13 +573,59 @@ export function computePeriod(input: PeriodInput): PeriodResult {
     };
   });
 
-  const totals = { revenueC: 0, peopleC: 0, directC: 0, contributionC: 0, overheadC: 0, netC: 0 };
+  // ----- Carry: a General Sales loss is carried by the key accounts -----------
+  // When General Sales nets negative after overhead, that loss spreads across
+  // the other clients by revenue share (fallback: direct cost, then equal) in
+  // its own Carry column; General Sales takes the offsetting credit and lands
+  // on exactly zero. Carry nets to zero in total, so reconciliation is untouched.
+  let carriedLossC = 0;
+  const generalResult = clients.find((c) => c.isGeneral);
+  const carriers = clients.filter((c) => !c.isGeneral);
+  if (generalResult && generalResult.netC < 0 && carriers.length > 0) {
+    carriedLossC = -generalResult.netC;
+    let w = carriers.map((c) => Math.max(0, c.revenueC));
+    if (!w.some((x) => x > 0)) w = carriers.map((c) => Math.max(0, c.peopleC + c.directC));
+    if (!w.some((x) => x > 0)) w = carriers.map(() => 1);
+    const shares = largestRemainder(carriedLossC, w);
+    carriers.forEach((c, i) => {
+      const share = shares[i];
+      if (share === 0) return;
+      c.carryC = share;
+      c.netC -= share;
+      c.netPct = c.revenueC !== 0 ? (c.netC / c.revenueC) * 100 : null;
+      const pw = c.projects.map((p) => Math.max(0, p.revenueC));
+      if (pw.some((x) => x > 0)) {
+        const ps = largestRemainder(share, pw);
+        c.projects.forEach((p, j) => {
+          p.carryC += ps[j];
+          p.netC -= ps[j];
+        });
+      } else {
+        const def = c.projects.find((p) => p.isDefault) ?? c.projects[0];
+        if (def) {
+          def.carryC += share;
+          def.netC -= share;
+        }
+      }
+    });
+    // Every General Sales project zeroes out; the credits sum to the loss.
+    for (const p of generalResult.projects) {
+      p.carryC = p.netC;
+      p.netC = 0;
+    }
+    generalResult.carryC = -carriedLossC;
+    generalResult.netC = 0;
+    generalResult.netPct = generalResult.revenueC !== 0 ? 0 : null;
+  }
+
+  const totals = { revenueC: 0, peopleC: 0, directC: 0, contributionC: 0, overheadC: 0, carryC: 0, netC: 0 };
   for (const c of clients) {
     totals.revenueC += c.revenueC;
     totals.peopleC += c.peopleC;
     totals.directC += c.directC;
     totals.contributionC += c.contributionC;
     totals.overheadC += c.overheadC;
+    totals.carryC += c.carryC;
     totals.netC += c.netC;
   }
 
@@ -593,6 +641,7 @@ export function computePeriod(input: PeriodInput): PeriodResult {
     excludedC: excludedCatC + splitExcludedC,
     excludedRevenueC,
     totals,
+    carriedLossC,
     reconciliation: {
       costInC,
       costAllocatedC,

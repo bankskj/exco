@@ -135,6 +135,14 @@ apportioned by **largest remainder** so pieces sum exactly to the pool. Within
 a client the share spreads over its projects by the same basis. General Sales
 takes part like any client.
 
+**Carry.** When General Sales nets negative after overhead, that loss doesn't
+sit on its row: it moves to a separate **Carry** column, spread across the
+other clients in proportion to revenue (fallback: direct cost, then equal),
+while General Sales takes the offsetting credit and lands on exactly zero.
+Carry nets to zero in total — it is a redistribution, so the overall Net and
+the reconciliation are unchanged. Net = Revenue − People − Direct − Overhead −
+Carry.
+
 **Reconciliation (hard check, every period):**
 Σ clients (People + Direct + Overhead) = Σ non-excluded cost lines + payroll
 estimates, and Σ clients Revenue = Σ revenue lines — both **to the cent**. On

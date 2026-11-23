@@ -2004,7 +2004,20 @@ async function computeBillingMonths(db: D1Database, months: string[]): Promise<M
   const inputs = toCompute.length ? await loadPeriodInputs(db, toCompute) : new Map();
   for (const m of wanted) {
     const snap = snaps.get(m);
-    out.set(m, snap ?? computePeriod(inputs.get(m)!));
+    if (snap) {
+      // Snapshots frozen before the Carry column exist without it.
+      if (snap.totals.carryC === undefined) {
+        snap.totals.carryC = 0;
+        (snap as { carriedLossC?: number }).carriedLossC = (snap as { carriedLossC?: number }).carriedLossC ?? 0;
+        for (const cl of snap.clients) {
+          cl.carryC = cl.carryC ?? 0;
+          for (const pr of cl.projects) pr.carryC = pr.carryC ?? 0;
+        }
+      }
+      out.set(m, snap);
+    } else {
+      out.set(m, computePeriod(inputs.get(m)!));
+    }
   }
   return out;
 }
@@ -2052,7 +2065,8 @@ function mergeProjectResults(parts: ProjectResult[]): ProjectResult {
     directBySupplier: mergeSupplierAmounts(parts.map((p) => p.directBySupplier)),
     contributionC: revenueC - peopleC - directC,
     overheadC,
-    netC: revenueC - peopleC - directC - overheadC,
+    carryC: sum((p) => p.carryC ?? 0),
+    netC: revenueC - peopleC - directC - overheadC - sum((p) => p.carryC ?? 0),
     budgetRevenueC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetRevenueC), null),
     budgetCostC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetCostC), null),
   };
@@ -2088,8 +2102,9 @@ function mergeClientResults(parts: ClientResult[]): ClientResult {
     contributionC,
     contributionPct: pctOf(contributionC, revenueC),
     overheadC,
-    netC: contributionC - overheadC,
-    netPct: pctOf(contributionC - overheadC, revenueC),
+    carryC: sum((p) => p.carryC ?? 0),
+    netC: contributionC - overheadC - sum((p) => p.carryC ?? 0),
+    netPct: pctOf(contributionC - overheadC - sum((p) => p.carryC ?? 0), revenueC),
     budgetRevenueC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetRevenueC), null),
     budgetCostC: parts.reduce<number | null>((a, p) => addBudget(a, p.budgetCostC), null),
     projects: [...byProject.values()].map(mergeProjectResults),
@@ -2129,8 +2144,10 @@ function mergeBillingResults(parts: PeriodResult[]): PeriodResult | null {
       directC: sum((p) => p.totals.directC),
       contributionC: sum((p) => p.totals.contributionC),
       overheadC: sum((p) => p.totals.overheadC),
+      carryC: sum((p) => p.totals.carryC ?? 0),
       netC: sum((p) => p.totals.netC),
     },
+    carriedLossC: sum((p) => p.carriedLossC ?? 0),
     reconciliation: {
       costInC: sum((p) => p.reconciliation.costInC),
       costAllocatedC: sum((p) => p.reconciliation.costAllocatedC),
@@ -2148,8 +2165,8 @@ function mergeBillingResults(parts: PeriodResult[]): PeriodResult | null {
   };
 }
 
-const EMPTY_AGG: TrackerAggregate = { revenueC: 0, peopleC: 0, directC: 0, contributionC: 0, overheadC: 0, netC: 0, budgetRevenueC: null, budgetCostC: null };
-const aggAdd = (a: TrackerAggregate, r: { revenueC: number; peopleC: number; directC: number; contributionC: number; overheadC: number; netC: number; budgetRevenueC: number | null; budgetCostC: number | null } | null): TrackerAggregate =>
+const EMPTY_AGG: TrackerAggregate = { revenueC: 0, peopleC: 0, directC: 0, contributionC: 0, overheadC: 0, carryC: 0, netC: 0, budgetRevenueC: null, budgetCostC: null };
+const aggAdd = (a: TrackerAggregate, r: { revenueC: number; peopleC: number; directC: number; contributionC: number; overheadC: number; carryC?: number; netC: number; budgetRevenueC: number | null; budgetCostC: number | null } | null): TrackerAggregate =>
   r
     ? {
         revenueC: a.revenueC + r.revenueC,
@@ -2157,6 +2174,7 @@ const aggAdd = (a: TrackerAggregate, r: { revenueC: number; peopleC: number; dir
         directC: a.directC + r.directC,
         contributionC: a.contributionC + r.contributionC,
         overheadC: a.overheadC + r.overheadC,
+        carryC: a.carryC + (r.carryC ?? 0),
         netC: a.netC + r.netC,
         budgetRevenueC: addBudget(a.budgetRevenueC, r.budgetRevenueC),
         budgetCostC: addBudget(a.budgetCostC, r.budgetCostC),
@@ -2487,13 +2505,13 @@ app.get("/app/clients/export.csv", async (c) => {
     const rows: string[] = [];
     for (const [m, res] of resMap) {
       const cl = res.clients.find((x) => x.clientId === id);
-      if (cl) rows.push([m, esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), R2(cl.overheadC), R2(cl.netC)].join(","));
+      if (cl) rows.push([m, esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), R2(cl.overheadC), R2(cl.carryC ?? 0), R2(cl.netC)].join(","));
     }
-    return csvResponse(c, `client-${id}.csv`, ["month,client,revenue,people,direct,contribution,overhead,net", ...rows].join("\n"));
+    return csvResponse(c, `client-${id}.csv`, ["month,client,revenue,people,direct,contribution,overhead,carry,net", ...rows].join("\n"));
   }
   const result = mergeBillingResults([...resMap.values()]);
-  const rows = (result?.clients ?? []).map((cl) => [esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), cl.contributionPct?.toFixed(1) ?? "", R2(cl.overheadC), R2(cl.netC), cl.netPct?.toFixed(1) ?? ""].join(","));
-  return csvResponse(c, `clients-${pKey}.csv`, [`client,revenue,people,direct,contribution,contribution_pct,overhead,net,net_pct — ${pl}`, ...rows].join("\n"));
+  const rows = (result?.clients ?? []).map((cl) => [esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), cl.contributionPct?.toFixed(1) ?? "", R2(cl.overheadC), R2(cl.carryC ?? 0), R2(cl.netC), cl.netPct?.toFixed(1) ?? ""].join(","));
+  return csvResponse(c, `clients-${pKey}.csv`, [`client,revenue,people,direct,contribution,contribution_pct,overhead,carry,net,net_pct — ${pl}`, ...rows].join("\n"));
 });
 
 // ---- Client tracker + project view -------------------------------------------

@@ -306,7 +306,10 @@ describe("computePeriod — worked example 2026-10", () => {
     expect(abf.directC).toBe(94_800);
     expect(abf.contributionC).toBe(23_905_200);
     expect(abf.overheadC).toBe(2_775_000);
-    expect(abf.netC).toBe(21_130_200);
+    // General Sales nets -4 625 after overhead; ABF carries its revenue share
+    // of that loss (300k of 350k carrier revenue): 462 500 x 6/7 = 396 429c.
+    expect(abf.carryC).toBe(396_429);
+    expect(abf.netC).toBe(20_733_771);
     expect(abf.peopleByStaff).toEqual([
       { employeeId: "staff-a", name: "Staff A", amountC: 6_000_000, estimated: false },
     ]);
@@ -322,7 +325,8 @@ describe("computePeriod — worked example 2026-10", () => {
     expect(ax.directC).toBe(100_000);
     expect(ax.contributionC).toBe(2_900_000);
     expect(ax.overheadC).toBe(462_500);
-    expect(ax.netC).toBe(2_437_500);
+    expect(ax.carryC).toBe(66_071); // 462 500 x 1/7, largest remainder
+    expect(ax.netC).toBe(2_371_429);
   });
 
   it("General Sales figures", () => {
@@ -333,7 +337,9 @@ describe("computePeriod — worked example 2026-10", () => {
     expect(gen.contributionC).toBe(0);
     expect(gen.contributionPct).toBe(0);
     expect(gen.overheadC).toBe(462_500);
-    expect(gen.netC).toBe(-462_500);
+    // Its 4 625 loss is carried by the key accounts; the credit zeroes it.
+    expect(gen.carryC).toBe(-462_500);
+    expect(gen.netC).toBe(0);
   });
 
   it("zero clients stay zero", () => {
@@ -362,8 +368,10 @@ describe("computePeriod — worked example 2026-10", () => {
       directC: 3_194_800,
       contributionC: 26_805_200,
       overheadC: 3_700_000,
+      carryC: 0, // carry is a redistribution — it always nets to zero
       netC: 23_105_200,
     });
+    expect(r.carriedLossC).toBe(462_500);
   });
 
   it("reconciliation and exceptions", () => {
