@@ -12,8 +12,10 @@
     { "pattern": "exco.elula.online", "custom_domain": true }
   ],
   "triggers": {
-    // Daily full Xero sync: 02:00 UTC (04:00 SAST) — covers recurring-expense
-    // detection and the client-billing ledgers (supersedes the old monthly run)
+    // Daily full Xero sync: 02:00 UTC (04:00 SAST). Covers recurring-expense
+    // detection, repeating schedules + sales invoices (forecast) and the
+    // client-billing ledgers, so the separate light daily refresh
+    // (DAILY_REPEATING_CRON, 30 3 * * *) is not scheduled.
     "crons": ["0 2 * * *"]
   },
   "d1_databases": [

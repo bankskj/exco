@@ -12,7 +12,7 @@ export type EntryMap = Map<string, Map<string, { amount: number; status: string 
 export type ForecastTab = "overview" | "monthly" | "assumptions";
 
 const srcLabel = (s: string): string =>
-  s === "manual" ? "MANUAL" : s === "yoy" ? "prior-year trend" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : s === "avg" ? "historical avg" : "actual";
+  s === "manual" ? "MANUAL" : s === "yoy" ? "prior-year trend" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : s === "avg" ? "historical avg" : s === "none" ? "type to add" : "actual";
 
 const SCENARIO_LABEL: Record<"base" | "best" | "worst", string> = { base: "Expected", best: "Optimistic", worst: "Conservative" };
 
@@ -40,6 +40,8 @@ export const ForecastPage: FC<{
   entries: EntryMap;
   dealValues?: Map<string, number>; // pipeline income from deals' expected payment dates (read-only)
   dealCommValues?: Map<string, number>; // commission owed to staff on those deals (read-only cost)
+  currentMonth: string; // from here on, income comes from real data only (no trend guess)
+  replaced?: Map<string, Map<string, string>>; // manual income row → month → Xero invoice that replaced the typed value
   boundary: string;
   tab: ForecastTab;
   facility: { used: number; limit: number | null };
@@ -47,7 +49,7 @@ export const ForecastPage: FC<{
   lastSync?: string | null;
   line?: string; // open the details drawer for this row key
   saved?: boolean;
-}> = ({ cf, settings, overrideCats, adjCats, entries, dealValues, dealCommValues, boundary, tab, facility, bankEstimate, lastSync, line, saved }) => {
+}> = ({ cf, settings, overrideCats, adjCats, entries, dealValues, dealCommValues, currentMonth, replaced, boundary, tab, facility, bankEstimate, lastSync, line, saved }) => {
   // Show the boundary FY's actual months (read-only context) before the editable forecast months.
   const actualMonths = cf.columns
     .filter((c) => !c.isForecast && fiscalYearOf(c.month) === fiscalYearOf(boundary))
@@ -114,6 +116,22 @@ export const ForecastPage: FC<{
             {c ? formatZAR(pick(c)) : ""}{c?.isForecast && tag ? <span class="cellhint"> {tag}</span> : null}
           </td>
         );
+      })}
+    </tr>
+  );
+
+  // Read-only scheduled row: forecast months only (actual months come from the books).
+  const ScheduledRow: FC<{ title: string; hint: string; badge: "income" | "cost"; href: string; pick: (c: NonNullable<ReturnType<typeof colByMonth.get>>) => number }> = ({ title, hint, badge, href, pick }) => (
+    <tr>
+      <td style="text-align:left">
+        <a href={href}>{title}</a> <span class={`badge ${badge}`}>{badge}</span>
+        <div class="cellhint">{hint}</div>
+      </td>
+      {actualMonths.map(() => <td class="num muted">—</td>)}
+      {months.map((m) => {
+        const c = colByMonth.get(m);
+        const v = c ? pick(c) : 0;
+        return <td class="num">{v ? formatZAR(v) : ""}</td>;
       })}
     </tr>
   );
@@ -190,17 +208,24 @@ export const ForecastPage: FC<{
                 <div>
                   <strong style="font-size:14px">Cash in</strong>
                   <ol class="muted" style="font-size:13px;margin:8px 0 0;padding-left:20px">
-                    <li>Manual override typed in the grid (<span class="badge manual">MANUAL</span>)</li>
-                    <li>Deal expected payments (<span class="badge income">deal</span>)</li>
-                    <li>Prior-year trend — last year's month × FY-to-date growth (<span class="badge forecast">FORECAST</span>)</li>
-                    <li>3-month historical average (fallback)</li>
+                    <li><a href="/app/finance/recurring">Recurring invoices</a> — Xero repeating invoices, by due date</li>
+                    <li><a href="/app/finance/receivables">Open invoices</a> — unpaid Xero sales invoices, by due date (overdue counts in the current month)</li>
+                    <li><a href="/app/pipeline">Deals</a> — expected payment dates on the Pipeline</li>
+                    <li>Received so far — invoice payments already in the current month</li>
+                    <li>Other expected income — only what you type in the grid (<span class="badge manual">MANUAL</span>)</li>
                   </ol>
+                  <p class="muted" style="font-size:12px;margin:8px 0 0">
+                    No income is guessed from past months from {label(currentMonth)} on. Months between the books
+                    boundary and today still use the prior-year trend / 3-month average, since their invoices are
+                    already partly paid.
+                  </p>
                 </div>
                 <div>
                   <strong style="font-size:14px">Cash out</strong>
                   <ol class="muted" style="font-size:13px;margin:8px 0 0;padding-left:20px">
                     <li>Manual override typed in the grid (<span class="badge manual">MANUAL</span>)</li>
                     <li>People — payroll capture grid, then active-staff CTC</li>
+                    <li>Committed recurring bills — Xero repeating bills, by due date</li>
                     <li>Recurring costs — tracked on the Costs tab</li>
                     <li>Other — prior-year trend, then 3-month average; SARS at its 3-month average</li>
                   </ol>
@@ -228,7 +253,9 @@ export const ForecastPage: FC<{
                   </thead>
                   <tbody>
                     <tr class="group"><td colspan={allMonths.length + 1}>Cash in</td></tr>
-                    <OverrideRow k="income" title="Customer collections" hint="cash received — the invoiced view is on Profit & Loss" />
+                    <ScheduledRow title="Recurring invoices" badge="income" href="/app/finance/recurring" hint="read-only · Xero repeating invoices, by due date" pick={(c) => c.recIncome} />
+                    <ScheduledRow title="Open invoices" badge="income" href="/app/finance/receivables" hint="read-only · unpaid Xero sales invoices, by due date" pick={(c) => c.openIncome} />
+                    <ScheduledRow title="Received so far" badge="income" href="/app/finance/transactions" hint="read-only · invoice payments already in this month (not yet closed)" pick={(c) => c.receivedIncome} />
                     {dealValues && dealValues.size > 0 ? (
                       <tr>
                         <td style="text-align:left">
@@ -239,15 +266,24 @@ export const ForecastPage: FC<{
                         {months.map((m) => <td class="num">{dealValues.get(m) ? formatZAR(dealValues.get(m)!) : ""}</td>)}
                       </tr>
                     ) : null}
+                    <OverrideRow k="income" title="Other expected income" hint={`manual · once-offs not yet invoiced or in the pipeline · before ${label(currentMonth)} the trend estimate applies`} />
                     {adjCats.filter((c2) => c2.kind === "income").map((cat) => (
                       <tr>
                         <td style="text-align:left">
                           <a href={lineHref(`adj_${cat.id}`)} title="What is this line?">{cat.name} <span class="muted" style="font-size:11px">ⓘ</span></a> <span class="badge income">income</span>
+                          {replaced?.has(cat.id) ? <div class="cellhint">typed amounts are skipped in months with a Xero invoice for this customer</div> : null}
                         </td>
                         {actualMonths.map(() => <td class="muted" style="text-align:center">—</td>)}
                         {months.map((m) => {
                           const v = entries.get(cat.id)?.get(m);
-                          return <td><input type="text" inputmode="decimal" name={`e_${cat.id}_${m}`} value={v ? String(v.amount) : ""} autocomplete="off" /></td>;
+                          const inv = replaced?.get(cat.id)?.get(m);
+                          return (
+                            <td title={inv ? `Not counted: Xero invoice ${inv} for this customer lands in this month and counts under Open invoices instead.` : undefined}>
+                              <input type="text" inputmode="decimal" name={`e_${cat.id}_${m}`} value={v ? String(v.amount) : ""} autocomplete="off"
+                                style={inv ? "text-decoration:line-through;opacity:.55" : undefined} />
+                              {inv ? <span class="cellhint"> invoiced · {inv}</span> : null}
+                            </td>
+                          );
                         })}
                       </tr>
                     ))}
@@ -264,7 +300,10 @@ export const ForecastPage: FC<{
                       </tr>
                     ) : null}
                     <tr class="group"><td colspan={allMonths.length + 1}>Operating costs</td></tr>
-                    <OverrideRow k="other" title="Other operating costs" hint="everything except people, tax and manual recurring" />
+                    <OverrideRow k="other" title="Other operating costs" hint="everything except people, tax and recurring — trend less the bills run-rate" />
+                    {cf.columns.some((c) => c.recBills) ? (
+                      <ScheduledRow title="Committed recurring bills" badge="cost" href="/app/finance/recurring" hint="read-only · Xero repeating bills, by due date" pick={(c) => c.recBills} />
+                    ) : null}
                     <ModelRow title="Recurring (manual)" hint="tracked on the Costs tab — outside Xero" pick={(c) => c.recurring} />
                     <tr class="group"><td colspan={allMonths.length + 1}>Tax</td></tr>
                     <ModelRow title="SARS — VAT / PAYE" hint="cash settlements to SARS; VAT is not in the P&L" pick={(c) => c.sars} tag="avg" />

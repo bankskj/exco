@@ -34,7 +34,10 @@ import { CashLiquidityPage } from "./views/cashflow_derived";
 import { CommissionsPage } from "./views/commissions";
 import { listCommissions, createCommission, setCommissionStage, setCommissionAmounts, updateCommissionDetails, deleteCommission, setIncludeForecast, listAllLines, addLine, deleteLine, COMM_STAGES, commissionOf } from "./data/commissions";
 import { buildDerivedCashflow } from "./lib/cashflow_engine";
-import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, fetchVatOwing, type PnL, type PnLRow } from "./lib/xero";
+import { listRepeatingSchedules, replaceRepeatingSchedules } from "./data/repeating";
+import { RecurringPage } from "./views/recurring";
+import { projectSchedules, groupByDueMonth, RECURRING_HORIZON_MONTHS } from "./lib/recurring";
+import { authUrl, exchangeCode, persistTokens, ensureAccessToken, fetchConnections, fetchRepeatingBills, fetchRepeatingRaw, toSchedules, fetchVendorBillSummary, vendorToBill, fetchProfitAndLoss, fetchDebtorCohorts, fetchActualTxns, fetchVatOwing, type PnL, type PnLRow } from "./lib/xero";
 import { getAllMeta } from "./data/db";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { PayrollReportPage, PayrollCapturePage, buildPayrollReport } from "./views/payroll";
@@ -45,7 +48,7 @@ import { AdminPage, DataQualityPage } from "./views/admin";
 import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { ActualsPage } from "./views/actuals";
-import { replaceXeroTxns, listXeroTxns, vendorSpendTotals } from "./data/actuals";
+import { replaceXeroTxns, replaceSalesTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, salesReceivedInMonth } from "./data/actuals";
 // --- Client Billing & Cost Allocation (docs/client-billing.md) -------------
 import { computePeriod } from "./lib/allocation";
 import { firstMatchingRule } from "./lib/billing_rules";
@@ -645,6 +648,17 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
       adjById.get(e.category_id)?.values.set(e.period, e.amount);
     }
   }
+  // A typed income amount for a customer stops counting once Xero has a real
+  // invoice landing in that month (open or paid) — the invoice counts instead.
+  // The typed value stays saved; it is only ignored while the invoice exists.
+  const replaced = invoiceReplacements(
+    adjRows.filter((r) => r.kind === "income"),
+    await listSalesForMatching(env.DB),
+    new Date().toISOString().slice(0, 7),
+  );
+  for (const [rowId, months] of replaced) {
+    for (const m of months.keys()) adjById.get(rowId)?.values.delete(m);
+  }
   // Deals pipeline: unpaid, forecast-included deals with an expected payment date land as forecast income.
   const deals = await listCommissions(env.DB);
   const dealValues = new Map<string, number>();
@@ -669,10 +683,35 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   if (dealCommValues.size > 0) {
     adjRows.push({ id: "__deal_comm__", name: "Commission owed (deals)", kind: "cost", values: dealCommValues });
   }
+  // Xero repeating schedules → scheduled recurring income / committed bills,
+  // projected fresh from today. Forecast is in ZAR, so other currencies are
+  // listed on the Recurring page but kept out of the totals.
+  const schedules = (await listRepeatingSchedules(env.DB)).filter((s) => s.currency === "ZAR");
+  const today = new Date().toISOString().slice(0, 10);
+  // Project schedules to the end of the engine window (never less than the
+  // default 12 months), so no forecast month is left with zero income.
+  const engineEnd = addMonths(settings.actuals_through, Math.max(1, settings.horizon_months));
+  const recurringMonths = Math.max(RECURRING_HORIZON_MONTHS, monthsBetweenIncl(today.slice(0, 7), engineEnd));
+  const projected = projectSchedules(schedules, today, recurringMonths);
+  const recurringByMonth = groupByDueMonth(projected, schedules, today);
+  const openInvoices = openSalesByMonth(await listOpenSales(env.DB), today.slice(0, 7));
+  const scheduled: import("./lib/cashflow_engine").CfScheduled = {
+    income: recurringByMonth.income,
+    bills: recurringByMonth.bills,
+    incomeRunRate: recurringByMonth.incomeRunRate,
+    billRunRate: recurringByMonth.billRunRate,
+    openInvoices,
+    received: new Map([[today.slice(0, 7), await salesReceivedInMonth(env.DB, today.slice(0, 7))]]),
+    coveredFrom: today.slice(0, 7),
+    coveredThrough: addMonths(today.slice(0, 7), recurringMonths - 1),
+  };
+  // Until the first sync after deploy the schedules table is empty: keep the
+  // trend estimate for income rather than showing a collapsed forecast.
+  const repeatingSynced = await getMeta(env.DB, "xero_repeating_synced");
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
-  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor);
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor, repeatingSynced ? scheduled : null);
   // Collections gap: invoiced (accrual) vs received (cash) per complete month,
   // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
   const debtors = await listCfDebtors(env.DB);
@@ -688,7 +727,9 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
     .filter((r) => r.invoiced !== 0 || r.received !== 0);
   const syncNote = actuals.size === 0
     ? (synced ? "P&L actuals are empty — run a Xero sync on the Expenses tab." : "No P&L actuals yet — reconnect Xero (report scope) and run a sync on the Expenses tab to populate the model.")
-    : undefined;
+    : !repeatingSynced
+      ? "Recurring invoices have not been synced yet, so forecast income is still the trend estimate. Run a Xero sync on the Expenses tab."
+      : undefined;
   const debtorsDue = [...debtors.values()].reduce((t, d) => t + d.due, 0);
   const revolving = Number((await getMeta(env.DB, "cf_revolving_owed")) ?? 0) || 0;
   const facilityLimitRaw = await getMeta(env.DB, "cf_facility_limit");
@@ -697,7 +738,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const nowMonth2 = new Date().toISOString().slice(0, 7);
   const bankToday = cf.columns.find((col) => col.month === nowMonth2)?.balance ?? cf.kpis.currentCash;
   const position = { bankToday, debtorsDue, revolving, month: nowMonth2 };
-  return { settings, cf, actuals, syncNote, overrideCats, adjCats, entries, collections, position, dealValues, dealCommValues, deals, facilityLimit, lastSync, payrollEmps, payrollEntries, allExpenses };
+  return { settings, cf, actuals, syncNote, overrideCats, adjCats, entries, collections, position, dealValues, dealCommValues, deals, facilityLimit, lastSync, payrollEmps, payrollEntries, allExpenses, scheduled, replaced };
 }
 
 app.get("/app/finance/cash", async (c) => {
@@ -735,7 +776,7 @@ app.get("/app/finance/forecast", async (c) => {
     }
   }
   const { derived, snapshot } = await loadSnapshot(c.env);
-  const { settings, cf, overrideCats, adjCats, entries, dealValues, dealCommValues } = derived;
+  const { settings, cf, overrideCats, adjCats, entries, dealValues, dealCommValues, scheduled, replaced } = derived;
   const map: EntryMap = new Map();
   for (const e of entries) {
     if (!map.has(e.category_id)) map.set(e.category_id, new Map());
@@ -745,13 +786,26 @@ app.get("/app/finance/forecast", async (c) => {
   const tab: ForecastTab = tRaw === "monthly" || tRaw === "assumptions" ? tRaw : "overview";
   return c.html(
     <ForecastPage cf={cf} settings={settings} overrideCats={overrideCats} adjCats={adjCats} entries={map}
-      dealValues={dealValues} dealCommValues={dealCommValues} boundary={settings.actuals_through} tab={tab}
+      dealValues={dealValues} dealCommValues={dealCommValues} currentMonth={scheduled.coveredFrom} replaced={replaced} boundary={settings.actuals_through} tab={tab}
       facility={{ used: snapshot.facility.used, limit: snapshot.facility.limit }} bankEstimate={snapshot.cash.bankEstimate}
       lastSync={derived.lastSync ? formatDMYTime(derived.lastSync) : null}
       line={c.req.query("line")} saved={c.req.query("saved") === "1"} />,
   );
 });
 app.get("/app/accounts/edit", (c) => c.redirect("/app/finance/forecast?t=monthly"));
+
+app.get("/app/finance/recurring", async (c) => {
+  const [schedules, synced, error] = await Promise.all([
+    listRepeatingSchedules(c.env.DB),
+    getMeta(c.env.DB, "xero_repeating_synced"),
+    getMeta(c.env.DB, "xero_repeating_error"),
+  ]);
+  const projected = projectSchedules(schedules.filter((s) => s.currency === "ZAR"));
+  return c.html(
+    <RecurringPage schedules={schedules} projected={projected} horizonMonths={RECURRING_HORIZON_MONTHS}
+      synced={synced ? formatDMYTime(synced) : null} error={error || null} />,
+  );
+});
 
 app.post("/app/accounts/save", async (c) => {
   const body = await c.req.parseBody();
@@ -1233,16 +1287,51 @@ function autoExcludeReason(vendorName: string, staffNames: string[]): string | n
   return null;
 }
 
-/** Full Xero sync: repeating bills + rule-driven vendor detection. Used by the button and the monthly cron. */
-async function runXeroSync(env: Bindings): Promise<string> {
+async function xeroAuth(env: Bindings): Promise<{ token: string; tenantId: string }> {
   if (!env.XERO_CLIENT_ID || !env.XERO_CLIENT_SECRET) throw new Error("Xero credentials not set");
   const token = await ensureAccessToken(env.DB, env.XERO_CLIENT_ID.trim(), env.XERO_CLIENT_SECRET.trim());
   if (!token) throw new Error("Not connected to Xero yet");
   const tenantId = await getMeta(env.DB, "xero_tenant_id");
   if (!tenantId) throw new Error("No Xero organisation selected — reconnect");
+  return { token, tenantId };
+}
 
+/** Store repeating schedules (sales + bills). Read-only against Xero. */
+async function storeRepeatingSchedules(env: Bindings, raw: any[]): Promise<number> {
+  const schedules = toSchedules(raw);
+  await replaceRepeatingSchedules(env.DB, schedules);
+  await setMeta(env.DB, "xero_repeating_synced", new Date().toISOString());
+  await setMeta(env.DB, "xero_repeating_error", "");
+  return schedules.length;
+}
+
+/** Daily refresh: just the repeating schedules — one light Xero call. */
+async function runRepeatingSync(env: Bindings): Promise<string> {
+  const { token, tenantId } = await xeroAuth(env);
+  const n = await storeRepeatingSchedules(env, await fetchRepeatingRaw(token, tenantId));
+  // Same run: the sales invoices those templates create, and their payments.
+  // Without this, an invoice leaves the Recurring line as soon as it is raised
+  // but only reaches Open invoices at the next full (monthly) sync.
+  try {
+    const { since, txns } = await fetchActualTxns(token, tenantId, 18, { salesOnly: true });
+    await replaceSalesTxns(env.DB, since, txns);
+    await setMeta(env.DB, "xero_sales_refreshed", new Date().toISOString());
+    await setMeta(env.DB, "xero_actuals_error", "");
+    return `Repeating schedules refreshed: ${n} template(s); ${txns.length} sales invoice(s).`;
+  } catch (e) {
+    await setMeta(env.DB, "xero_actuals_error", `Daily sales refresh failed: ${e instanceof Error ? e.message : "unknown"}`);
+    return `Repeating schedules refreshed: ${n} template(s); sales invoices not refreshed.`;
+  }
+}
+
+/** Full Xero sync: repeating bills + rule-driven vendor detection. Used by the button and the monthly cron. */
+async function runXeroSync(env: Bindings): Promise<string> {
+  const { token, tenantId } = await xeroAuth(env);
+
+  const repeatingRaw = await fetchRepeatingRaw(token, tenantId);
+  const scheduleCount = await storeRepeatingSchedules(env, repeatingRaw);
   const [repeating, summary, rules, names] = await Promise.all([
-    fetchRepeatingBills(token, tenantId),
+    fetchRepeatingBills(token, tenantId, repeatingRaw),
     fetchVendorBillSummary(token, tenantId, SYNC_MONTHS_BACK),
     listVendorRules(env.DB),
     staffFirstNames(env.DB),
@@ -1370,7 +1459,7 @@ async function runXeroSync(env: Bindings): Promise<string> {
     await setMeta(env.DB, "vat_error", e instanceof Error ? e.message : "unknown");
   }
   await setMeta(env.DB, "xero_last_sync", new Date().toISOString());
-  const msg = `Xero sync done: ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.${billingMsg ? ` ${billingMsg}.` : ""}`;
+  const msg = `Xero sync done: ${scheduleCount} repeating schedule(s), ${repeating.length} repeating bill(s), ${bills.length - repeating.length} recurring vendor(s) tracked, ${excluded} excluded — ${ins} new, ${upd} updated, ${pruned} stale removed.${billingMsg ? ` ${billingMsg}.` : ""}`;
   await setMeta(env.DB, "xero_last_sync_result", msg);
   return msg;
 }
@@ -2917,12 +3006,24 @@ app.post("/app/revenue/import", async (c) => {
   return c.redirect("/app/revenue?p=month");
 });
 
+const DAILY_REPEATING_CRON = "30 3 * * *"; // must match wrangler.jsonc
+
 app.notFound((c) => c.html(<Landing />, 404));
 
 export default {
   fetch: app.fetch,
-  // Monthly cron: refresh the Xero connection and recurring-expense detection.
-  async scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+  // Monthly cron: full Xero sync. Daily cron: repeating schedules plus sales
+  // invoices and their payments (no bills / bank feed), so
+  // changes to recurring invoices in Xero reach the forecast within a day.
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    if (event.cron === DAILY_REPEATING_CRON) {
+      ctx.waitUntil(
+        runRepeatingSync(env).catch(async (e) => {
+          await setMeta(env.DB, "xero_repeating_error", `Daily refresh failed: ${e instanceof Error ? e.message : "unknown"}`);
+        }),
+      );
+      return;
+    }
     ctx.waitUntil(
       runXeroSync(env).catch(async (e) => {
         await setMeta(env.DB, "xero_last_sync_result", `Scheduled sync failed: ${e instanceof Error ? e.message : "unknown"}`);
