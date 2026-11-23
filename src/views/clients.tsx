@@ -308,6 +308,9 @@ export type ClientTrackerPageProps = {
   expand: string | null;
   projectCount: number;
   periodLabel: string;
+  /** View toggles (?oh= / ?cy=): include overhead recovery / carry in Net. */
+  showOverhead: boolean;
+  showCarry: boolean;
 };
 
 type TrackerCol = { t: "m"; i: number } | { t: "q"; i: number } | { t: "fy" };
@@ -337,6 +340,21 @@ const TrackerHead: FC<{ months: string[]; cols: TrackerCol[]; firstLabel: string
   </thead>
 );
 
+/** Toggle chips: include/exclude overhead recovery and carry from Net. */
+const DeductionToggles: FC<{ showOverhead: boolean; showCarry: boolean }> = ({ showOverhead, showCarry }) => {
+  const qs = (oh: boolean, cy: boolean) => `?oh=${oh ? 1 : 0}&cy=${cy ? 1 : 0}`;
+  return (
+    <div class="segmented noprint" style="margin:8px 0 2px">
+      <a href={qs(!showOverhead, showCarry)} class={showOverhead ? "seg active" : "seg"} title="Include overhead recovery in Net">
+        Overhead {showOverhead ? "on" : "off"}
+      </a>
+      <a href={qs(showOverhead, !showCarry)} class={showCarry ? "seg active" : "seg"} title="Include the General Sales carry in Net">
+        Carry {showCarry ? "on" : "off"}
+      </a>
+    </div>
+  );
+};
+
 /**
  * Per-client tracker — the 2025 layout: FY months across, Q1..Q4 subtotal
  * columns and an FY total, with server-rendered expandable Revenue / People /
@@ -351,7 +369,11 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
   expand,
   projectCount,
   periodLabel,
+  showOverhead,
+  showCarry,
 }) => {
+  const adjNet = (a: TrackerAggregate): number => a.contributionC - (showOverhead ? a.overheadC : 0) - (showCarry ? a.carryC : 0);
+  const netLabel = showOverhead && showCarry ? "Net" : `Net (excl ${[!showOverhead ? "overhead" : null, !showCarry ? "carry" : null].filter(Boolean).join(" & ")})`;
   const cols = buildCols(months);
   const aggOf = (c: TrackerCol): TrackerAggregate | null =>
     c.t === "m" ? perMonth[c.i] ?? null : c.t === "q" ? quarterTotals[c.i] ?? null : fyTotal;
@@ -366,7 +388,7 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
       <tr>
         <td style={`text-align:left${opts?.strong ? ";font-weight:700" : ""}`}>
           {opts?.expandKey ? (
-            <a href={isOpen ? "?" : `?expand=${opts.expandKey}`} style="font-weight:600">
+            <a href={isOpen ? `?oh=${showOverhead ? 1 : 0}&cy=${showCarry ? 1 : 0}` : `?expand=${opts.expandKey}&oh=${showOverhead ? 1 : 0}&cy=${showCarry ? 1 : 0}`} style="font-weight:600">
               {name} <span class="muted" style="font-size:10px">{isOpen ? "▲" : "▼"}</span>
             </a>
           ) : (
@@ -449,7 +471,8 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
               <Info text="YTD and quarter columns are subtotals of the computed months. People breaks down by staff member, Direct by report group (and from there by supplier)." />
             </p>
           </div>
-          <div class="row" style="gap:8px;margin-top:10px">
+          <div class="row" style="gap:8px;margin-top:10px;align-items:center">
+            <DeductionToggles showOverhead={showOverhead} showCarry={showCarry} />
             <ExportPdfButton />
             <a class="btn btn-sm" href={`/app/clients/export.csv?view=client&id=${client.id}`}>⤓ CSV</a>
           </div>
@@ -502,7 +525,7 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
                   )}
                   <tr>
                     <td style="text-align:left;padding-left:26px" colspan={cols.length + 1}>
-                      <a href="?expand=suppliers" style="font-size:12px">by supplier →</a>
+                      <a href={`?expand=suppliers&oh=${showOverhead ? 1 : 0}&cy=${showCarry ? 1 : 0}`} style="font-size:12px">by supplier →</a>
                     </td>
                   </tr>
                 </>
@@ -514,20 +537,20 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
                   )}
                   <tr>
                     <td style="text-align:left;padding-left:26px" colspan={cols.length + 1}>
-                      <a href="?expand=direct" style="font-size:12px">← by report group</a>
+                      <a href={`?expand=direct&oh=${showOverhead ? 1 : 0}&cy=${showCarry ? 1 : 0}`} style="font-size:12px">← by report group</a>
                     </td>
                   </tr>
                 </>
               ) : null}
               {numRow("Balance", (a) => a.contributionC, { negRed: true, strong: true })}
-              {numRow("Overhead recovery", (a) => a.overheadC)}
-              {numRow("Carry (General Sales loss)", (a) => (a.carryC === 0 ? null : a.carryC))}
-              {numRow("Net", (a) => a.netC, { negRed: true, strong: true })}
+              {showOverhead ? numRow("Overhead recovery", (a) => a.overheadC) : null}
+              {showCarry ? numRow("Carry (General Sales loss)", (a) => (a.carryC === 0 ? null : a.carryC)) : null}
+              {numRow(netLabel, adjNet, { negRed: true, strong: true })}
               <tr>
                 <td style="text-align:left">Net %</td>
                 {cols.map((c) => {
                   const a = aggOf(c);
-                  const p = a ? netPctOf(a.netC, a.revenueC) : null;
+                  const p = a ? netPctOf(adjNet(a), a.revenueC) : null;
                   return (
                     <td class={`num ${p != null && p < 0 ? "neg" : ""}`} style={c.t !== "m" ? QCOL_STYLE : ""}>
                       {pct1(p)}
@@ -574,13 +597,17 @@ export type ProjectViewPageProps = {
   perMonth: (ProjectResult | null)[];
   fyTotal: TrackerAggregate;
   periodLabel: string;
+  showOverhead: boolean;
+  showCarry: boolean;
 };
 
 /**
  * Per-project tracker — same month layout as the client tracker (months + FY
  * total, no quarter columns), plus contract-value and invoiced-to-date KPIs.
  */
-export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, months, perMonth, fyTotal, periodLabel }) => {
+export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, months, perMonth, fyTotal, periodLabel, showOverhead, showCarry }) => {
+  const adjNet = (a: TrackerAggregate): number => a.contributionC - (showOverhead ? a.overheadC : 0) - (showCarry ? a.carryC : 0);
+  const netLabel = showOverhead && showCarry ? "Net" : `Net (excl ${[!showOverhead ? "overhead" : null, !showCarry ? "carry" : null].filter(Boolean).join(" & ")})`;
   const cols: TrackerCol[] = [{ t: "fy" }, ...months.map((_, i): TrackerCol => ({ t: "m", i }))];
   const aggOf = (c: TrackerCol): TrackerAggregate | null => (c.t === "m" ? perMonth[c.i] ?? null : c.t === "fy" ? fyTotal : null);
   const row = (name: string, get: (a: TrackerAggregate) => number | null, negRed?: boolean, strong?: boolean) => (
@@ -612,7 +639,10 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
             </h1>
             <p class="muted" style="margin-top:0">{client.name} · {periodLabel}</p>
           </div>
-          <div style="margin-top:10px"><ExportPdfButton /></div>
+          <div class="row" style="gap:8px;margin-top:10px;align-items:center">
+            <DeductionToggles showOverhead={showOverhead} showCarry={showCarry} />
+            <ExportPdfButton />
+          </div>
         </div>
 
         <div class="kpis section-block">
@@ -647,14 +677,14 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
               {row("People", (a) => a.peopleC)}
               {row("Direct", (a) => a.directC)}
               {row("Balance", (a) => a.contributionC, true, true)}
-              {row("Overhead recovery", (a) => a.overheadC)}
-              {row("Carry", (a) => (a.carryC === 0 ? null : a.carryC))}
-              {row("Net", (a) => a.netC, true, true)}
+              {showOverhead ? row("Overhead recovery", (a) => a.overheadC) : null}
+              {showCarry ? row("Carry", (a) => (a.carryC === 0 ? null : a.carryC)) : null}
+              {row(netLabel, adjNet, true, true)}
               <tr>
                 <td style="text-align:left">Net %</td>
                 {cols.map((c) => {
                   const a = aggOf(c);
-                  const p = a ? netPctOf(a.netC, a.revenueC) : null;
+                  const p = a ? netPctOf(adjNet(a), a.revenueC) : null;
                   return (
                     <td class={`num ${p != null && p < 0 ? "neg" : ""}`} style={c.t === "fy" ? QCOL_STYLE : ""}>{pct1(p)}</td>
                   );

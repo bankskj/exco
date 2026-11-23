@@ -2516,6 +2516,8 @@ app.get("/app/clients/export.csv", async (c) => {
 
 // ---- Client tracker + project view -------------------------------------------
 
+const viewToggle = (c: any, key: string): boolean => c.req.query(key) !== "0";
+
 app.get("/app/clients/:id", async (c) => {
   const db = c.env.DB;
   const id = c.req.param("id");
@@ -2542,6 +2544,8 @@ app.get("/app/clients/:id", async (c) => {
       expand={c.req.query("expand") ?? null}
       projectCount={projects.length}
       periodLabel={fyLabel(fy)}
+      showOverhead={viewToggle(c, "oh")}
+      showCarry={viewToggle(c, "cy")}
     />,
   );
 });
@@ -2572,6 +2576,8 @@ app.get("/app/clients/:id/projects/:pid", async (c) => {
       perMonth={perMonth}
       fyTotal={perMonth.reduce(aggAdd, EMPTY_AGG)}
       periodLabel={fyLabel(fy)}
+      showOverhead={viewToggle(c, "oh")}
+      showCarry={viewToggle(c, "cy")}
     />,
   );
 });
