@@ -2567,15 +2567,23 @@ async function allocationsProps(db: D1Database, period: string): Promise<Omit<Al
   const input = await loadPeriodInput(db, isDefault ? nowBillingPeriod() : period);
   const costBy = new Map<string, number>();
   for (const l of input.costLines) if (l.employeeId) costBy.set(l.employeeId, (costBy.get(l.employeeId) ?? 0) + l.amountC);
-  const staff = input.staff
-    .map((s) => {
-      const direct = costBy.get(s.employeeId) ?? 0;
-      const estimated = direct === 0 && s.payrollGrossC !== null;
-      const costC = direct !== 0 ? direct : estimated ? Math.round((s.payrollGrossC as number) * (1 + s.loadingPct / 100)) : 0;
-      return { employeeId: s.employeeId, name: s.name, costC, estimated };
-    })
-    .filter((s) => s.costC !== 0)
-    .sort((a, b) => b.costC - a.costC);
+  const withCost = input.staff.map((s) => {
+    const direct = costBy.get(s.employeeId) ?? 0;
+    const estimated = direct === 0 && s.payrollGrossC !== null;
+    const costC = direct !== 0 ? direct : estimated ? Math.round((s.payrollGrossC as number) * (1 + s.loadingPct / 100)) : 0;
+    return { employeeId: s.employeeId, name: s.name, costC, estimated };
+  });
+  // A month shows only people with cost in it; the DEFAULT template lists every
+  // active staff member (current-month cost shown where known, else R 0).
+  let staff: { employeeId: string; name: string; costC: number; estimated: boolean }[];
+  if (isDefault) {
+    const active = ((await db.prepare("SELECT id FROM employees WHERE status = 'active'").all()).results ?? []) as { id: string }[];
+    const activeIds = new Set(active.map((e) => String(e.id)));
+    staff = withCost.filter((s) => activeIds.has(s.employeeId) || s.costC !== 0);
+    staff.sort((a, b) => b.costC - a.costC || a.name.localeCompare(b.name));
+  } else {
+    staff = withCost.filter((s) => s.costC !== 0).sort((a, b) => b.costC - a.costC);
+  }
   const clientOf = new Map(input.clients.map((cl) => [cl.id, cl]));
   const activeClients = input.clients.filter((cl) => cl.active);
   const columns: { projectId: string; label: string }[] = [];
