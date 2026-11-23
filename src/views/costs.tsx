@@ -214,30 +214,25 @@ export const CostInboxPage: FC<CostInboxPageProps> = ({
                                 <input type="hidden" name="p" value={periodKey} />
                                 <input type="hidden" name="tab" value={tab} />
                                 <strong style="font-size:13px">…or split it ({R(l.amountC)})</strong>
-                                <table style="border-collapse:collapse;font-size:13px;margin-top:6px">
-                                  <tbody>
-                                    {[0, 1, 2, 3].map((i) => (
-                                      <tr>
-                                        <td style="padding:3px 10px 3px 0">
-                                          <TargetSelect name={`split_target_${i}`} projects={projects} allowEmpty />
-                                        </td>
-                                        <td style="padding:3px 0">
-                                          <input
-                                            name={`split_pct_${i}`}
-                                            size={4}
-                                            inputmode="decimal"
-                                            autocomplete="off"
-                                            placeholder="%"
-                                            style="width:70px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);text-align:right"
-                                          />
-                                          <span class="muted" style="font-size:12px"> %</span>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                {/* 12 legs = one per client; empty rows are ignored on save. */}
+                                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:4px 28px;margin-top:6px;max-width:760px">
+                                  {Array.from({ length: 12 }, (_, i) => (
+                                    <div class="row" style="gap:8px;align-items:center">
+                                      <TargetSelect name={`split_target_${i}`} projects={projects} allowEmpty />
+                                      <input
+                                        name={`split_pct_${i}`}
+                                        size={4}
+                                        inputmode="decimal"
+                                        autocomplete="off"
+                                        placeholder="%"
+                                        style="width:70px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);text-align:right"
+                                      />
+                                      <span class="muted" style="font-size:12px">%</span>
+                                    </div>
+                                  ))}
+                                </div>
                                 <button class="btn btn-sm" type="submit" style="margin-top:8px">Save split</button>
-                                <span class="muted" style="font-size:12px;margin-left:10px">Percentages must total 100.</span>
+                                <span class="muted" style="font-size:12px;margin-left:10px">Percentages must total 100; leave unused lines blank.</span>
                               </form>
                             </div>
                           )}
@@ -467,7 +462,7 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
                   </tr>
                 </thead>
                 <tbody>
-                  {[0, 1, 2, 3, 4, 5].map((i) => {
+                  {Array.from({ length: 12 }, (_, i) => i).map((i) => {
                     const s = editing.splits[i] ?? null;
                     const sel = s ? s.projectId ?? "overhead" : "";
                     return (

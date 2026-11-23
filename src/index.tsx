@@ -2796,7 +2796,7 @@ app.post("/app/costs/split", async (c) => {
   const b = await c.req.parseBody();
   const id = String(b.id ?? "");
   const splits: { targetKind: BillingTargetKind; projectId: string | null; pct: number }[] = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 12; i++) {
     const target = String(b[`split_target_${i}`] ?? "");
     const pct = parseMoney(String(b[`split_pct_${i}`] ?? "").trim() || "0");
     if (!target || !(pct > 0)) continue;
@@ -2915,7 +2915,7 @@ app.post("/app/costs/rule", async (c) => {
   const b = await c.req.parseBody();
   const mode = b.mode === "fixed" ? ("fixed" as const) : ("percent" as const);
   const splits: CostRule["splits"] = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     const target = String(b[`split_target_${i}`] ?? "");
     if (!target) continue;
     const pctRaw = String(b[`split_pct_${i}`] ?? "").trim();
