@@ -2507,11 +2507,11 @@ app.get("/app/clients/export.csv", async (c) => {
       const cl = res.clients.find((x) => x.clientId === id);
       if (cl) rows.push([m, esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), R2(cl.overheadC), R2(cl.carryC ?? 0), R2(cl.netC)].join(","));
     }
-    return csvResponse(c, `client-${id}.csv`, ["month,client,revenue,people,direct,contribution,overhead,carry,net", ...rows].join("\n"));
+    return csvResponse(c, `client-${id}.csv`, ["month,client,revenue,people,direct,balance,overhead,carry,net", ...rows].join("\n"));
   }
   const result = mergeBillingResults([...resMap.values()]);
   const rows = (result?.clients ?? []).map((cl) => [esc(cl.name), R2(cl.revenueC), R2(cl.peopleC), R2(cl.directC), R2(cl.contributionC), cl.contributionPct?.toFixed(1) ?? "", R2(cl.overheadC), R2(cl.carryC ?? 0), R2(cl.netC), cl.netPct?.toFixed(1) ?? ""].join(","));
-  return csvResponse(c, `clients-${pKey}.csv`, [`client,revenue,people,direct,contribution,contribution_pct,overhead,carry,net,net_pct — ${pl}`, ...rows].join("\n"));
+  return csvResponse(c, `clients-${pKey}.csv`, [`client,revenue,people,direct,balance,balance_pct,overhead,carry,net,net_pct — ${pl}`, ...rows].join("\n"));
 });
 
 // ---- Client tracker + project view -------------------------------------------

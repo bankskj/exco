@@ -92,7 +92,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
             <p class="muted" style="margin-top:0">
               Who makes us money? Revenue, people cost, direct cost and the overhead recovery per client —{" "}
               every cent of cost lands on exactly one line.{" "}
-              <Info text="People = allocated staff cost; Direct = supplier costs assigned to the client; Overhead = the shared pool recovered on the configured basis; Carry = a General Sales loss carried by the key accounts in proportion to revenue (General Sales gets the offsetting credit and nets zero). Net = Revenue − People − Direct − Overhead − Carry." />
+              <Info text="People = allocated staff cost; Direct = supplier costs assigned to the client; Balance = Revenue − People − Direct (before deductions); Overhead = the shared pool recovered on the configured basis; Carry = a General Sales loss carried by the key accounts in proportion to revenue (General Sales gets the offsetting credit and nets zero). Net = Balance − Overhead − Carry." />
             </p>
             <AsAt lastSync={lastSyncLabel} />
           </div>
@@ -125,7 +125,7 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
             <div class="kpis section-block">
               <Kpi label={`Revenue — ${periodLabel}`} value={R(result.totals.revenueC)} />
               <Kpi
-                label="Contribution"
+                label="Balance"
                 value={R(result.totals.contributionC)}
                 tone={result.totals.contributionC < 0 ? "neg" : "pos"}
                 sub="revenue − people − direct"
@@ -181,8 +181,8 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                       <th>Revenue</th>
                       <th>People</th>
                       <th>Direct</th>
-                      <th>Contribution</th>
-                      <th>Contr %</th>
+                      <th title="Revenue − People − Direct, before overhead and carry">Balance</th>
+                      <th>Bal %</th>
                       <th>Overhead</th>
                       <th title="General Sales loss carried by the key accounts, by revenue share">Carry</th>
                       <th>Net</th>
@@ -519,7 +519,7 @@ export const ClientTrackerPage: FC<ClientTrackerPageProps> = ({
                   </tr>
                 </>
               ) : null}
-              {numRow("Contribution", (a) => a.contributionC, { negRed: true, strong: true })}
+              {numRow("Balance", (a) => a.contributionC, { negRed: true, strong: true })}
               {numRow("Overhead recovery", (a) => a.overheadC)}
               {numRow("Carry (General Sales loss)", (a) => (a.carryC === 0 ? null : a.carryC))}
               {numRow("Net", (a) => a.netC, { negRed: true, strong: true })}
@@ -646,7 +646,7 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
               {row("Revenue", (a) => a.revenueC)}
               {row("People", (a) => a.peopleC)}
               {row("Direct", (a) => a.directC)}
-              {row("Contribution", (a) => a.contributionC, true, true)}
+              {row("Balance", (a) => a.contributionC, true, true)}
               {row("Overhead recovery", (a) => a.overheadC)}
               {row("Carry", (a) => (a.carryC === 0 ? null : a.carryC))}
               {row("Net", (a) => a.netC, true, true)}
@@ -672,7 +672,7 @@ export const ProjectViewPage: FC<ProjectViewPageProps> = ({ client, project, mon
         </div>
         <p class="muted" style="font-size:12px;margin-top:8px">
           {months.length ? <>Figures for {label(months[0])}{months.length > 1 ? ` – ${label(months[months.length - 1])}` : ""}; </> : null}
-          Overhead is recovered at client level and apportioned to projects by contribution.
+          Overhead is recovered at client level and apportioned to projects by revenue.
         </p>
       </div>
     </Layout>
