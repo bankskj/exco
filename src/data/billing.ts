@@ -803,6 +803,55 @@ export async function clearAllocations(db: D1Database, period: string, actor: st
   ]);
 }
 
+/**
+ * The DEFAULT allocation set lives under pseudo-period 'default' — lexically
+ * greater than any 'YYYY-MM', so the engine's `period <= month` loads never
+ * see it. It only reaches the figures when applied (materialised) into months.
+ */
+export const DEFAULT_ALLOC_PERIOD = "default";
+
+export async function listDefaultAllocations(db: D1Database): Promise<StaffAllocation[]> {
+  const { results } = await db
+    .prepare("SELECT employee_id, period, target_kind, project_id, pct FROM staff_allocations WHERE period = ?")
+    .bind(DEFAULT_ALLOC_PERIOD)
+    .all<any>();
+  return (results ?? []).map((a: any) => ({
+    employeeId: String(a.employee_id),
+    period: String(a.period),
+    targetKind: a.target_kind as "project" | "overhead",
+    projectId: a.project_id ?? null,
+    pct: Number(a.pct),
+  }));
+}
+
+/**
+ * Copy the default set into every OPEN billing period. Months that already
+ * have their own rows are left alone unless `overwrite` is set; closed months
+ * are never touched. Returns the periods written.
+ */
+export async function applyDefaultAllocations(db: D1Database, actor: string, overwrite: boolean): Promise<string[]> {
+  const def = await listDefaultAllocations(db);
+  if (def.length === 0) throw new BillingError("No default allocations saved yet — fill the Default tab first", 422);
+  const periods = ((await db.prepare("SELECT period FROM billing_periods WHERE status = 'open' ORDER BY period").all<{ period: string }>()).results ?? []).map((r) => r.period);
+  const withRows = new Set(
+    (((await db.prepare("SELECT DISTINCT period FROM staff_allocations WHERE period != ?").bind(DEFAULT_ALLOC_PERIOD).all<{ period: string }>()).results) ?? []).map((r) => r.period),
+  );
+  const targets = periods.filter((p) => overwrite || !withRows.has(p));
+  if (targets.length === 0) return [];
+  const stmts: D1PreparedStatement[] = [];
+  for (const p of targets) {
+    stmts.push(db.prepare("DELETE FROM staff_allocations WHERE period = ?").bind(p));
+    for (const r of def) {
+      stmts.push(
+        db.prepare("INSERT INTO staff_allocations (id, employee_id, period, target_kind, project_id, pct) VALUES (?, ?, ?, ?, ?, ?)").bind(uuid(), r.employeeId, p, r.targetKind, r.projectId, r.pct),
+      );
+    }
+  }
+  stmts.push(auditStmt(db, actor, "staff_allocations", DEFAULT_ALLOC_PERIOD, "apply_default", null, { periods: targets, overwrite }));
+  for (let i = 0; i < stmts.length; i += 40) await db.batch(stmts.slice(i, i + 40));
+  return targets;
+}
+
 // ---------------------------------------------------------------------------
 // Ledger queries for views
 // ---------------------------------------------------------------------------

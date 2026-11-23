@@ -58,7 +58,8 @@ import {
   loadPeriodInput, loadPeriodInputs, syncBillingLedgers, mapContact, deleteContactMapping, addStaffPayee, deleteStaffPayee, listStaffPayees,
   setEmployeeBillingSettings, listClients, createClient, listBillingProjects, createProject, updateProject,
   closeProject, listCategories as listGlCategories, setCategoryTreatment, listContactMappings, setFixedShares,
-  saveAllocations, copyAllocationsForward, clearAllocations, listRevenueLinesForPeriods, listCostLinesForPeriods,
+  saveAllocations, copyAllocationsForward, clearAllocations, listDefaultAllocations, applyDefaultAllocations,
+  listRevenueLinesForPeriods, listCostLinesForPeriods,
   setRevenueProjectOverride, setCostSplits, importCsv, listRules, saveRule, deleteRule, rulePreview, listAudit,
   type AllocationInput, type CostLineView,
 } from "./data/billing";
@@ -2551,8 +2552,11 @@ app.get("/app/clients/:id/projects/:pid", async (c) => {
 
 // ---- Staff allocation grid ---------------------------------------------------
 
-async function allocationsProps(db: D1Database, period: string): Promise<Omit<AllocationsPageProps, "saved" | "error">> {
-  const input = await loadPeriodInput(db, period);
+async function allocationsProps(db: D1Database, period: string): Promise<Omit<AllocationsPageProps, "saved" | "error" | "applied">> {
+  // The Default tab shows the standard split; staff costs display on the
+  // current month's basis since a default has no month of its own.
+  const isDefault = period === "default";
+  const input = await loadPeriodInput(db, isDefault ? nowBillingPeriod() : period);
   const costBy = new Map<string, number>();
   for (const l of input.costLines) if (l.employeeId) costBy.set(l.employeeId, (costBy.get(l.employeeId) ?? 0) + l.amountC);
   const staff = input.staff
@@ -2574,28 +2578,35 @@ async function allocationsProps(db: D1Database, period: string): Promise<Omit<Al
   for (const p of input.projects.filter((p) => !p.isDefault && p.status === "open")) {
     columns.push({ projectId: p.id, label: `${clientOf.get(p.clientId)?.shortName ?? ""} · ${p.name}` });
   }
-  const byEmp = new Map<string, StaffAllocation[]>();
-  for (const a of input.allocations) {
-    const list = byEmp.get(a.employeeId) ?? [];
-    list.push(a);
-    byEmp.set(a.employeeId, list);
-  }
   const cells: Record<string, Record<string, number>> = {};
   const overheadPct: Record<string, number> = {};
-  let anyAtPeriod = false;
-  let latestEarlier = "";
-  for (const [emp, rows] of byEmp) {
-    const latest = rows.reduce((mx, r) => (r.period > mx ? r.period : mx), "");
-    if (!latest) continue;
-    if (latest === period) anyAtPeriod = true;
-    else if (latest > latestEarlier) latestEarlier = latest;
-    for (const r of rows.filter((x) => x.period === latest)) {
-      if (r.targetKind === "overhead") overheadPct[emp] = (overheadPct[emp] ?? 0) + r.pct;
-      else if (r.projectId) {
-        if (!cells[emp]) cells[emp] = {};
-        cells[emp][r.projectId] = (cells[emp][r.projectId] ?? 0) + r.pct;
-      }
+  let carriedFrom: string | null = null;
+  const addRow = (r: StaffAllocation) => {
+    if (r.targetKind === "overhead") overheadPct[r.employeeId] = (overheadPct[r.employeeId] ?? 0) + r.pct;
+    else if (r.projectId) {
+      if (!cells[r.employeeId]) cells[r.employeeId] = {};
+      cells[r.employeeId][r.projectId] = (cells[r.employeeId][r.projectId] ?? 0) + r.pct;
     }
+  };
+  if (isDefault) {
+    for (const r of await listDefaultAllocations(db)) addRow(r);
+  } else {
+    const byEmp = new Map<string, StaffAllocation[]>();
+    for (const a of input.allocations) {
+      const list = byEmp.get(a.employeeId) ?? [];
+      list.push(a);
+      byEmp.set(a.employeeId, list);
+    }
+    let anyAtPeriod = false;
+    let latestEarlier = "";
+    for (const [, rows] of byEmp) {
+      const latest = rows.reduce((mx, r) => (r.period > mx ? r.period : mx), "");
+      if (!latest) continue;
+      if (latest === period) anyAtPeriod = true;
+      else if (latest > latestEarlier) latestEarlier = latest;
+      for (const r of rows.filter((x) => x.period === latest)) addRow(r);
+    }
+    carriedFrom = !anyAtPeriod && latestEarlier ? latestEarlier : null;
   }
   return {
     period,
@@ -2604,20 +2615,29 @@ async function allocationsProps(db: D1Database, period: string): Promise<Omit<Al
     columns,
     cells,
     overheadPct,
-    carriedFrom: !anyAtPeriod && latestEarlier ? latestEarlier : null,
+    carriedFrom,
   };
 }
 
+const allocPeriodOf = (v: string | undefined): string => (v === "default" ? "default" : isPeriod(String(v)) ? String(v) : nowBillingPeriod());
+
 app.get("/app/allocations", async (c) => {
-  const q = String(c.req.query("period") ?? "");
-  const period = isPeriod(q) ? q : nowBillingPeriod();
+  const period = allocPeriodOf(c.req.query("period"));
   const props = await allocationsProps(c.env.DB, period);
-  return c.html(<AllocationsPage {...props} saved={c.req.query("saved") === "1"} error={c.req.query("err") ?? null} />);
+  const appliedQ = Number(c.req.query("applied") ?? "");
+  return c.html(
+    <AllocationsPage
+      {...props}
+      saved={c.req.query("saved") === "1"}
+      applied={Number.isFinite(appliedQ) && c.req.query("applied") != null ? appliedQ : null}
+      error={c.req.query("err") ?? null}
+    />,
+  );
 });
 
 app.post("/app/allocations/save", async (c) => {
   const b = await c.req.parseBody();
-  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  const period = allocPeriodOf(String(b.period));
   const rows: AllocationInput[] = [];
   for (const [k, v] of Object.entries(b)) {
     if (!k.startsWith("a::")) continue;
@@ -2631,11 +2651,22 @@ app.post("/app/allocations/save", async (c) => {
   } catch (e) {
     if (e instanceof BillingError && e.status === 422) {
       const props = await allocationsProps(c.env.DB, period);
-      return c.html(<AllocationsPage {...props} saved={false} error={e.message} />, 422);
+      return c.html(<AllocationsPage {...props} saved={false} applied={null} error={e.message} />, 422);
     }
     return billing409(c, e);
   }
   return c.redirect(`/app/allocations?period=${period}&saved=1`);
+});
+
+app.post("/app/allocations/apply-default", async (c) => {
+  const b = await c.req.parseBody();
+  try {
+    const periods = await applyDefaultAllocations(c.env.DB, (await getActor(c)) ?? "", b.overwrite === "1");
+    return c.redirect(`/app/allocations?period=default&applied=${periods.length}`);
+  } catch (e) {
+    if (e instanceof BillingError) return c.redirect(`/app/allocations?period=default&err=${encodeURIComponent(e.message)}`);
+    throw e;
+  }
 });
 
 app.post("/app/allocations/copy", async (c) => {
@@ -2652,7 +2683,7 @@ app.post("/app/allocations/copy", async (c) => {
 
 app.post("/app/allocations/clear", async (c) => {
   const b = await c.req.parseBody();
-  const period = isPeriod(String(b.period)) ? String(b.period) : nowBillingPeriod();
+  const period = allocPeriodOf(String(b.period));
   try {
     await clearAllocations(c.env.DB, period, (await getActor(c)) ?? "");
   } catch (e) {

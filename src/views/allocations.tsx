@@ -21,6 +21,8 @@ export type AllocationsPageProps = {
   /** When no rows exist for `period`, the period the shown values carry forward from. */
   carriedFrom: string | null;
   saved: boolean;
+  /** Months written by an apply-default action (null = not just applied). */
+  applied: number | null;
   error: string | null;
 };
 
@@ -69,12 +71,15 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
   overheadPct,
   carriedFrom,
   saved,
+  applied,
   error,
 }) => {
   const pctOf = (employeeId: string, projectId: string): number => cells[employeeId]?.[projectId] ?? 0;
   const rowSum = (employeeId: string): number =>
     columns.reduce((s, c) => s + pctOf(employeeId, c.projectId), 0) + (overheadPct[employeeId] ?? 0);
   const pctVal = (v: number): string => (v ? String(v) : "");
+  const isDefault = period === "default";
+  const periodLabel = isDefault ? "Default" : label(period);
 
   return (
     <Layout title="Allocations" authed section="clients" wide>
@@ -93,10 +98,20 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
         </div>
 
         <div class="segmented section-block" style="flex-wrap:wrap">
+          <a href="/app/allocations?period=default" class={isDefault ? "seg active" : "seg"} title="The standard split, applied to every open month">★ Default</a>
           {months.map((m) => (
             <a href={`/app/allocations?period=${m}`} class={m === period ? "seg active" : "seg"}>{label(m)}</a>
           ))}
         </div>
+
+        {isDefault ? (
+          <div class="callout section-block">
+            This is the <strong>standard split</strong> — it doesn't report anything by itself. Save it, then{" "}
+            <strong>Apply to all open months</strong> below to copy it into each month; closed months and months
+            you've already customised are left alone (tick overwrite to replace those too). After applying, adjust
+            any individual month on its own tab.
+          </div>
+        ) : null}
 
         {error ? (
           <div class="callout section-block" style="border-left-color:var(--danger)">
@@ -106,10 +121,16 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
         {saved ? (
           <p style="margin:14px 0 0"><span class="badge income">✓ Saved</span></p>
         ) : null}
+        {applied != null ? (
+          <p style="margin:14px 0 0">
+            <span class="badge income">✓ Applied to {applied} month(s)</span>
+            {applied === 0 ? <span class="muted" style="font-size:12px;margin-left:8px">every open month already has its own rows — tick overwrite to replace them</span> : null}
+          </p>
+        ) : null}
         {carriedFrom ? (
           <div class="callout section-block">
-            No rows for <strong>{label(period)}</strong> — showing <strong>{label(carriedFrom)}</strong> (carry-forward).
-            Saving writes them to {label(period)}.
+            No rows for <strong>{periodLabel}</strong> — showing <strong>{label(carriedFrom)}</strong> (carry-forward).
+            Saving writes them to {periodLabel}.
           </div>
         ) : null}
 
@@ -130,7 +151,7 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
                 {staff.length === 0 ? (
                   <tr>
                     <td colspan={columns.length + 4} style="text-align:left" class="muted">
-                      No staff with cost in {label(period)} yet. People appear here once a Xero payment matches one of
+                      No staff with cost in {isDefault ? "the current month" : periodLabel} yet. People appear here once a Xero payment matches one of
                       their <a href="/app/clients/settings#staff">payee aliases</a> or a payroll amount is captured for
                       the month in <a href="/app/payroll/capture">Payroll</a>.
                     </td>
@@ -190,24 +211,33 @@ export const AllocationsPage: FC<AllocationsPageProps> = ({
             </table>
           </div>
           <div class="toolbar">
-            <button id="alloc-save" class="btn btn-primary" type="submit">Save {label(period)}</button>
+            <button id="alloc-save" class="btn btn-primary" type="submit">Save {periodLabel}</button>
           </div>
         </form>
 
-        <div class="row" style="gap:10px">
-          <form method="post" action="/app/allocations/copy" style="margin:0">
-            <input type="hidden" name="period" value={period} />
-            <input type="hidden" name="from" value={addMonths(period, -1)} />
-            <button class="btn btn-sm" type="submit">Copy previous month</button>
-          </form>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          {isDefault ? (
+            <form method="post" action="/app/allocations/apply-default" class="row" style="margin:0;gap:10px;align-items:center">
+              <button class="btn btn-sm btn-primary" type="submit">Apply to all open months</button>
+              <label style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px" class="muted">
+                <input type="checkbox" name="overwrite" value="1" style="width:auto" /> overwrite months already set
+              </label>
+            </form>
+          ) : (
+            <form method="post" action="/app/allocations/copy" style="margin:0">
+              <input type="hidden" name="period" value={period} />
+              <input type="hidden" name="from" value={addMonths(period, -1)} />
+              <button class="btn btn-sm" type="submit">Copy previous month</button>
+            </form>
+          )}
           <form
             method="post"
             action="/app/allocations/clear"
             style="margin:0"
-            onsubmit={`return confirm('Clear all allocation rows for ${label(period)}?')`}
+            onsubmit={`return confirm('Clear all allocation rows for ${periodLabel}?')`}
           >
             <input type="hidden" name="period" value={period} />
-            <button class="btn btn-sm btn-danger" type="submit">Clear month</button>
+            <button class="btn btn-sm btn-danger" type="submit">{isDefault ? "Clear default" : "Clear month"}</button>
           </form>
         </div>
 

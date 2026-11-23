@@ -106,7 +106,11 @@ director payments coded to client accounts still follow the person. Per member,
 monthly cost = Σ their lines; if none but an Exco payroll entry exists, use
 gross × (1 + loading %) instead, marked **estimated**. The month's share %
 (`staff_allocations`) spreads the cost over projects/overhead; a month with no
-rows **carries the latest earlier month forward**. The remainder (100 − sum)
+rows **carries the latest earlier month forward**. The grid's **★ Default tab**
+holds a standard split (stored under pseudo-period `default`, invisible to the
+engine); *Apply to all open months* copies it into every open month — skipping
+months already customised unless overwrite is ticked — after which individual
+months are edited as usual. The remainder (100 − sum)
 goes to the member's default target: General Sales, or Shared Overhead for
 admin staff (and KJ Banks — all director time is overhead). Totals over 100%
 are rejected at save time (HTTP 422). A people-account line whose payee matches
