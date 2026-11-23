@@ -586,13 +586,24 @@ function projGet(accessToken: string, tenantId: string) {
 const amt = (v: any): number => Number(v?.value ?? v ?? 0) || 0;
 
 /** All projects (any state) with their lifetime financial totals. */
-export async function fetchProjects(accessToken: string, tenantId: string): Promise<XeroProject[]> {
+export async function fetchProjects(accessToken: string, tenantId: string): Promise<{ projects: XeroProject[]; rawSample: string }> {
   const get = projGet(accessToken, tenantId);
   const out: XeroProject[] = [];
+  let rawSample = "";
   for (let page = 1; page <= 20; page++) {
     const data = await get(`${PROJECTS_URL}?page=${page}&pageSize=50`);
     const items = data.items ?? [];
+    if (page === 1 && items.length) {
+      // Diagnostic: the largest-invoiced project's raw payload, so field-name
+      // drift in Xero's API is visible instead of silently zeroing charges.
+      const biggest = [...items].sort((a: any, b: any) => amt(b.projectAmountInvoiced ?? b.totalInvoiced) - amt(a.projectAmountInvoiced ?? a.totalInvoiced))[0];
+      rawSample = JSON.stringify(biggest).slice(0, 4000);
+    }
     for (const p of items) {
+      // Field fallbacks: some tenants return the split invoiced/to-be-invoiced
+      // amounts without the total* rollups.
+      const taskAmount = amt(p.totalTaskAmount) || amt(p.taskAmountInvoiced) + amt(p.taskAmountToBeInvoiced);
+      const expenseAmount = amt(p.totalExpenseAmount) || amt(p.expenseAmountInvoiced) + amt(p.expenseAmountToBeInvoiced);
       out.push({
         id: String(p.projectId),
         name: String(p.name ?? "Unnamed project"),
@@ -600,8 +611,8 @@ export async function fetchProjects(accessToken: string, tenantId: string): Prom
         currency: String(p.currencyCode ?? "ZAR"),
         estimate: p.estimate != null ? amt(p.estimate) : null,
         minutes_logged: Number(p.minutesLogged ?? 0) || 0,
-        task_amount: amt(p.totalTaskAmount),
-        expense_amount: amt(p.totalExpenseAmount),
+        task_amount: taskAmount,
+        expense_amount: expenseAmount,
         invoiced: amt(p.projectAmountInvoiced ?? p.totalInvoiced),
         to_be_invoiced: amt(p.taskAmountToBeInvoiced) + amt(p.expenseAmountToBeInvoiced),
         deposit: amt(p.deposit),
@@ -609,7 +620,7 @@ export async function fetchProjects(accessToken: string, tenantId: string): Prom
     }
     if (items.length < 50 || page >= Number(data.pagination?.pageCount ?? 1)) break;
   }
-  return out;
+  return { projects: out, rawSample };
 }
 
 /** Tasks (time items) for one project — expense line items are not exposed by the API. */

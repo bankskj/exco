@@ -1486,7 +1486,8 @@ async function runXeroSync(env: Bindings): Promise<string> {
   }
   // Xero Projects — lifetime totals, tasks and a monthly snapshot.
   try {
-    const projects = await fetchProjects(token, tenantId);
+    const { projects, rawSample } = await fetchProjects(token, tenantId);
+    if (rawSample) await setMeta(env.DB, "projects_raw_sample", rawSample);
     const allTasks: XeroProjectTask[] = [];
     for (const p of projects) {
       allTasks.push(...(await fetchProjectTasks(token, tenantId, p.id)));
