@@ -33,10 +33,12 @@ export function checkPassword(submitted: string, c: Context<AppEnv>): Promise<bo
   return timingSafeEqual(submitted, expected, c.env.SESSION_SECRET);
 }
 
-/** Issue a signed session cookie after a successful login. */
-export async function startSession(c: Context<AppEnv>): Promise<void> {
+/** Issue a signed session cookie after a successful login. The optional
+ * actor name rides along in the cookie value and feeds the billing audit log. */
+export async function startSession(c: Context<AppEnv>, actor = ""): Promise<void> {
   const expires = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
-  await setSignedCookie(c, COOKIE_NAME, String(expires.getTime()), c.env.SESSION_SECRET, {
+  const name = actor.trim().slice(0, 40).replace(/\|/g, " ");
+  await setSignedCookie(c, COOKIE_NAME, `${expires.getTime()}|${name}`, c.env.SESSION_SECRET, {
     path: "/",
     httpOnly: true,
     secure: true,
@@ -54,9 +56,17 @@ export function endSession(c: Context<AppEnv>): void {
 export async function isAuthed(c: Context<AppEnv>): Promise<boolean> {
   const value = await getSignedCookie(c, c.env.SESSION_SECRET, COOKIE_NAME);
   if (!value) return false;
-  const expiresAt = Number(value);
+  const expiresAt = Number(value.split("|")[0]);
   if (!Number.isFinite(expiresAt)) return false;
   return Date.now() < expiresAt;
+}
+
+/** The optional name captured at login (for audit trails), or null. */
+export async function getActor(c: Context<AppEnv>): Promise<string | null> {
+  const value = await getSignedCookie(c, c.env.SESSION_SECRET, COOKIE_NAME);
+  if (!value) return null;
+  const name = value.split("|").slice(1).join("|").trim();
+  return name || null;
 }
 
 /** Middleware: require a valid session, else redirect to /login. */

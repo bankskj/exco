@@ -105,7 +105,7 @@ app.post("/login", async (c) => {
   const body = await c.req.parseBody();
   const password = typeof body.password === "string" ? body.password : "";
   if (await checkPassword(password, c)) {
-    await startSession(c);
+    await startSession(c, typeof body.actor === "string" ? body.actor : "");
     return c.redirect("/app");
   }
   return c.redirect("/login?error=1");

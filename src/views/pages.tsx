@@ -46,6 +46,8 @@ export const Login: FC<{ error?: boolean }> = ({ error }) => (
         <form method="post" action="/login">
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+          <label for="actor" style="margin-top:10px;display:block">Your name <span class="muted">(optional — shown in the audit log)</span></label>
+          <input id="actor" name="actor" type="text" autocomplete="name" maxlength={40} />
           {error ? <div class="error">Incorrect password. Try again.</div> : null}
           <button class="btn btn-primary" type="submit" style="width:100%;margin-top:16px">
             Sign in
