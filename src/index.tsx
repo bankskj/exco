@@ -2207,13 +2207,16 @@ const billing409 = (c: any, e: unknown): Response => {
 app.get("/app/clients", async (c) => {
   const pKey = billingPeriodKey(c.req.query("p"));
   const view = c.req.query("view") === "grid" ? ("grid" as const) : ("table" as const);
+  const showOverhead = viewToggle(c, "oh");
+  const showCarry = viewToggle(c, "cy");
   const { months, label: periodLabel } = billingWindow(pKey);
   const resMap = await computeBillingMonths(c.env.DB, months);
   const computed = [...resMap.keys()];
   const result = mergeBillingResults(computed.map((m) => resMap.get(m)!));
+  const gridNet = (cl: ClientResult): number => cl.contributionC - (showOverhead ? cl.overheadC : 0) - (showCarry ? cl.carryC : 0);
   const monthlyNet =
     view === "grid"
-      ? computed.map((m) => ({ month: m, byClient: Object.fromEntries(resMap.get(m)!.clients.map((cl) => [cl.clientId, cl.netC])) }))
+      ? computed.map((m) => ({ month: m, byClient: Object.fromEntries(resMap.get(m)!.clients.map((cl) => [cl.clientId, gridNet(cl)])) }))
       : null;
   let closedBadge: string | null = null;
   if (months.length === 1) {
@@ -2257,6 +2260,8 @@ app.get("/app/clients", async (c) => {
       lastSyncLabel={lastSync ? formatDMYTime(lastSync) : null}
       closedBadge={closedBadge}
       xeroCheck={xeroCheck}
+      showOverhead={showOverhead}
+      showCarry={showCarry}
     />,
   );
 });

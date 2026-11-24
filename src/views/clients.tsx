@@ -63,6 +63,9 @@ export type ClientsSummaryPageProps = {
   closedBadge?: string | null;
   /** The Xero P&L (accrual) for the same window — the tie-out strip under the table. */
   xeroCheck: { incomeC: number; costC: number; monthsCovered: number; balanceSheetCostC: number } | null;
+  /** View toggles (?oh= / ?cy=): include overhead recovery / carry in Net. */
+  showOverhead: boolean;
+  showCarry: boolean;
 };
 
 const budgetVariance = (c: { netC: number; budgetRevenueC: number | null; budgetCostC: number | null }): number | null =>
@@ -82,8 +85,14 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
   lastSyncLabel,
   closedBadge,
   xeroCheck,
+  showOverhead,
+  showCarry,
 }) => {
-  const base = `/app/clients?p=${periodKey}`;
+  const togQS = `oh=${showOverhead ? 1 : 0}&cy=${showCarry ? 1 : 0}`;
+  const base = `/app/clients?p=${periodKey}&${togQS}`;
+  const adjNet = (x: { contributionC: number; overheadC: number; carryC: number }): number =>
+    x.contributionC - (showOverhead ? x.overheadC : 0) - (showCarry ? x.carryC : 0);
+  const netLabel = showOverhead && showCarry ? "Net" : `Net (excl ${[!showOverhead ? "overhead" : null, !showCarry ? "carry" : null].filter(Boolean).join(" & ")})`;
   return (
     <Layout title="Clients" authed section="clients" wide>
       <div class="container">
@@ -107,11 +116,14 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
           </div>
         </div>
 
-        <div class="row spread section-block" style="align-items:center">
-          <BillingPeriodTabs active={periodKey} base="/app/clients" extraQS={view === "grid" ? "view=grid" : undefined} />
-          <div class="segmented">
-            <a href={base} class={view === "table" ? "seg active" : "seg"}>Table</a>
-            <a href={`${base}&view=grid`} class={view === "grid" ? "seg active" : "seg"}>Month grid</a>
+        <div class="row spread section-block" style="align-items:center;flex-wrap:wrap;gap:10px">
+          <BillingPeriodTabs active={periodKey} base="/app/clients" extraQS={`${togQS}${view === "grid" ? "&view=grid" : ""}`} />
+          <div class="row" style="gap:10px;align-items:center">
+            <DeductionToggles showOverhead={showOverhead} showCarry={showCarry} extraQS={`p=${periodKey}${view === "grid" ? "&view=grid" : ""}`} />
+            <div class="segmented">
+              <a href={base} class={view === "table" ? "seg active" : "seg"}>Table</a>
+              <a href={`${base}&view=grid`} class={view === "grid" ? "seg active" : "seg"}>Month grid</a>
+            </div>
           </div>
         </div>
 
@@ -134,7 +146,10 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                 sub="revenue − people − direct"
               />
               <Kpi label="Overhead pool" value={R(result.poolC)} sub={`recovered on ${result.overheadBasis.replace("_", " ")}`} />
-              <Kpi label="Net" value={R(result.totals.netC)} tone={result.totals.netC < 0 ? "neg" : "pos"} />
+              {(() => {
+                const t = adjNet({ contributionC: result.totals.contributionC, overheadC: result.totals.overheadC, carryC: result.totals.carryC });
+                return <Kpi label={netLabel} value={R(t)} tone={t < 0 ? "neg" : "pos"} />;
+              })()}
             </div>
 
             {result.reconciliation.ok ? (
@@ -186,9 +201,9 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                       <th>Direct</th>
                       <th title="Revenue − People − Direct, before overhead and carry">Balance</th>
                       <th>Bal %</th>
-                      <th>Overhead</th>
-                      <th title="General Sales loss carried by the key accounts, by revenue share">Carry</th>
-                      <th>Net</th>
+                      {showOverhead ? <th>Overhead</th> : null}
+                      {showCarry ? <th title="General Sales loss carried by the key accounts, by revenue share">Carry</th> : null}
+                      <th>{netLabel}</th>
                       <th>Net %</th>
                       <th title="Net − (budget revenue − budget cost)">Budget var</th>
                     </tr>
@@ -207,10 +222,18 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                           <td class="num">{R(c.directC)}</td>
                           <td class={`num ${c.contributionC < 0 ? "neg" : ""}`}>{R(c.contributionC)}</td>
                           <td class={`num ${c.contributionPct != null && c.contributionPct < 0 ? "neg" : ""}`}>{pct1(c.contributionPct)}</td>
-                          <td class="num">{R(c.overheadC)}</td>
-                          <td class={`num ${c.carryC < 0 ? "muted" : ""}`}>{c.carryC === 0 ? <span class="muted">—</span> : R(c.carryC)}</td>
-                          <td class={`num ${c.netC < 0 ? "neg" : ""}`}>{R(c.netC)}</td>
-                          <td class={`num ${c.netPct != null && c.netPct < 0 ? "neg" : ""}`}>{pct1(c.netPct)}</td>
+                          {showOverhead ? <td class="num">{R(c.overheadC)}</td> : null}
+                          {showCarry ? <td class={`num ${c.carryC < 0 ? "muted" : ""}`}>{c.carryC === 0 ? <span class="muted">—</span> : R(c.carryC)}</td> : null}
+                          {(() => {
+                            const n = adjNet(c);
+                            const p = c.revenueC !== 0 ? (n / c.revenueC) * 100 : null;
+                            return (
+                              <>
+                                <td class={`num ${n < 0 ? "neg" : ""}`}>{R(n)}</td>
+                                <td class={`num ${p != null && p < 0 ? "neg" : ""}`}>{pct1(p)}</td>
+                              </>
+                            );
+                          })()}
                           <td class={`num ${bv != null && bv < 0 ? "neg" : ""}`}>{bv == null ? "—" : R(bv)}</td>
                         </tr>
                       );
@@ -222,12 +245,21 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                       <td class="num">{R(result.totals.directC)}</td>
                       <td class={`num ${result.totals.contributionC < 0 ? "neg" : ""}`}>{R(result.totals.contributionC)}</td>
                       <td class="num">{pct1(netPctOf(result.totals.contributionC, result.totals.revenueC))}</td>
-                      <td class="num">{R(result.totals.overheadC)}</td>
-                      <td class="num muted" title={result.carriedLossC ? `General Sales loss of ${R(result.carriedLossC)} redistributed — nets to zero` : undefined}>
-                        {result.carriedLossC ? `(${R(result.carriedLossC)})` : "—"}
-                      </td>
-                      <td class={`num ${result.totals.netC < 0 ? "neg" : ""}`}>{R(result.totals.netC)}</td>
-                      <td class="num">{pct1(netPctOf(result.totals.netC, result.totals.revenueC))}</td>
+                      {showOverhead ? <td class="num">{R(result.totals.overheadC)}</td> : null}
+                      {showCarry ? (
+                        <td class="num muted" title={result.carriedLossC ? `General Sales loss of ${R(result.carriedLossC)} redistributed — nets to zero` : undefined}>
+                          {result.carriedLossC ? `(${R(result.carriedLossC)})` : "—"}
+                        </td>
+                      ) : null}
+                      {(() => {
+                        const t = adjNet({ contributionC: result.totals.contributionC, overheadC: result.totals.overheadC, carryC: result.totals.carryC });
+                        return (
+                          <>
+                            <td class={`num ${t < 0 ? "neg" : ""}`}>{R(t)}</td>
+                            <td class="num">{pct1(netPctOf(t, result.totals.revenueC))}</td>
+                          </>
+                        );
+                      })()}
                       <td></td>
                     </tr>
                   </tbody>
@@ -415,8 +447,8 @@ const TrackerHead: FC<{ months: string[]; cols: TrackerCol[]; firstLabel: string
 );
 
 /** Toggle chips: include/exclude overhead recovery and carry from Net. */
-const DeductionToggles: FC<{ showOverhead: boolean; showCarry: boolean }> = ({ showOverhead, showCarry }) => {
-  const qs = (oh: boolean, cy: boolean) => `?oh=${oh ? 1 : 0}&cy=${cy ? 1 : 0}`;
+const DeductionToggles: FC<{ showOverhead: boolean; showCarry: boolean; extraQS?: string }> = ({ showOverhead, showCarry, extraQS }) => {
+  const qs = (oh: boolean, cy: boolean) => `?oh=${oh ? 1 : 0}&cy=${cy ? 1 : 0}${extraQS ? `&${extraQS}` : ""}`;
   return (
     <div class="segmented noprint" style="margin:8px 0 2px">
       <a href={qs(!showOverhead, showCarry)} class={showOverhead ? "seg active" : "seg"} title="Include overhead recovery in Net">
