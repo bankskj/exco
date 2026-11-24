@@ -62,7 +62,7 @@ export type ClientsSummaryPageProps = {
   lastSyncLabel: string | null;
   closedBadge?: string | null;
   /** The Xero P&L (accrual) for the same window — the tie-out strip under the table. */
-  xeroCheck: { incomeC: number; costC: number; monthsCovered: number } | null;
+  xeroCheck: { incomeC: number; costC: number; monthsCovered: number; balanceSheetCostC: number } | null;
 };
 
 const budgetVariance = (c: { netC: number; budgetRevenueC: number | null; budgetCostC: number | null }): number | null =>
@@ -287,10 +287,13 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                 <p class="muted" style="font-size:13px">No Xero P&amp;L synced for this window yet — run a sync.</p>
               ) : (
                 (() => {
+                  // Excluded here = P&L items the module keeps out of client
+                  // reporting; balance-sheet payments are outside BOTH sides.
+                  const exclPnlCostC = result.excludedC - xeroCheck.balanceSheetCostC;
                   const rows = [
                     { label: "Income", exco: result.totals.revenueC, excl: result.excludedRevenueC, xero: xeroCheck.incomeC },
-                    { label: "Expenditure", exco: result.reconciliation.costInC, excl: result.excludedC, xero: xeroCheck.costC },
-                    { label: "Balance (profit)", exco: result.totals.revenueC - result.reconciliation.costInC, excl: result.excludedRevenueC - result.excludedC, xero: xeroCheck.incomeC - xeroCheck.costC },
+                    { label: "Expenditure", exco: result.reconciliation.costInC, excl: exclPnlCostC, xero: xeroCheck.costC },
+                    { label: "Balance (profit)", exco: result.totals.revenueC - result.reconciliation.costInC, excl: result.excludedRevenueC - exclPnlCostC, xero: xeroCheck.incomeC - xeroCheck.costC },
                   ];
                   return (
                     <table style="border-collapse:collapse;font-size:13px;width:100%">
@@ -329,6 +332,9 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                   return (
                     <p class="muted" style="font-size:11px;margin:8px 0 0">
                       Xero P&amp;L covers {xeroCheck.monthsCovered} month(s) of this window · accrual basis, excl VAT.
+                      {xeroCheck.balanceSheetCostC !== 0 ? (
+                        <> Balance-sheet payments of <strong>{R(xeroCheck.balanceSheetCostC)}</strong> (VAT, loans, transfers) sit outside both sides of this comparison.</>
+                      ) : null}
                       {estC > 0 ? (
                         <>
                           {" "}Module expenditure includes <strong>{R(estC)} of payroll estimates</strong> for staff whose

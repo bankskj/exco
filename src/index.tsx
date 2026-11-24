@@ -2222,7 +2222,7 @@ app.get("/app/clients", async (c) => {
   }
   // Xero P&L for the same window (accrual actuals synced into cf_actuals):
   // the tie-out strip under the table compares it with the module's totals.
-  let xeroCheck: { incomeC: number; costC: number; monthsCovered: number } | null = null;
+  let xeroCheck: { incomeC: number; costC: number; monthsCovered: number; balanceSheetCostC: number } | null = null;
   if (computed.length) {
     const marks = computed.map(() => "?").join(",");
     const { results: pnlRows } = await c.env.DB
@@ -2236,7 +2236,13 @@ app.get("/app/clients", async (c) => {
         incomeC += Math.round((r.income_accr ?? 0) * 100);
         costC += Math.round(((r.staff_accr ?? 0) + (r.dev_accr ?? 0) + (r.other_accr ?? 0)) * 100);
       }
-      xeroCheck = { incomeC, costC, monthsCovered: pnlRows.length };
+      // Balance-sheet payments (VAT, loans, transfers) are excluded by the
+      // module AND absent from the P&L — they sit outside the comparison.
+      const bs = await c.env.DB
+        .prepare(`SELECT COALESCE(SUM(l.amount_c), 0) AS c FROM cost_lines l JOIN gl_categories g ON g.code = l.gl_code WHERE l.period IN (${marks}) AND g.report_group = 'Balance sheet'`)
+        .bind(...computed)
+        .first<{ c: number }>();
+      xeroCheck = { incomeC, costC, monthsCovered: pnlRows.length, balanceSheetCostC: Number(bs?.c ?? 0) };
     }
   }
   const lastSync = await getMeta(c.env.DB, "xero_last_sync");
