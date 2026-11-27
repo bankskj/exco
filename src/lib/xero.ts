@@ -371,37 +371,31 @@ export type PnL = {
   opexTotal: number[];
 };
 
-const MONTH_IDX: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
-
-function monthFromHeader(v: string): string | null {
-  const m = String(v).match(/([A-Za-z]{3})[a-z]*[\s-]+'?(\d{2,4})/);
-  if (!m) return null;
-  const mi = MONTH_IDX[m[1].toLowerCase()];
-  if (!mi) return null;
-  const y = m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]);
-  return `${y}-${String(mi).padStart(2, "0")}`;
-}
-
 const pnlNum = (v: unknown): number => {
   const n = parseFloat(String(v ?? "").replace(/,/g, ""));
   return Number.isFinite(n) ? n : 0;
 };
 
 /**
- * Xero Profit & Loss, monthly columns ending at toDate. Matches the Xero
- * dashboard by construction. monthsCount columns requested (Xero caps
- * comparison periods at 11 → max 12 columns).
+ * Xero Profit & Loss, monthly columns ending at toDate (monthsCount columns,
+ * fetched one report call per month and assembled here).
  */
-export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number, paymentsOnly = false): Promise<PnL> {
+/** One month of the P&L report, parsed into section buckets. */
+type PnLMonth = {
+  income: Map<string, number>;
+  cos: Map<string, number>;
+  opex: Map<string, number>;
+  incomeTotal: number | null;
+  cosTotal: number | null;
+  opexTotal: number | null;
+};
+
+async function fetchPnLMonth(accessToken: string, tenantId: string, month: string, paymentsOnly: boolean): Promise<PnLMonth> {
+  const [y, m] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const q = new URLSearchParams({
-    // Explicit fromDate is required: when omitted, Xero defaults it to the
-    // org's CURRENT financial-year start, which breaks any historical toDate
-    // ("fromDate must be before toDate"). Base period = the toDate month;
-    // `periods` extends backwards from there.
-    fromDate: `${toDate.slice(0, 7)}-01`,
-    toDate,
-    timeframe: "MONTH",
-    periods: String(Math.min(11, Math.max(1, monthsCount - 1))),
+    fromDate: `${month}-01`,
+    toDate: `${month}-${String(lastDay).padStart(2, "0")}`,
     standardLayout: "true",
   });
   if (paymentsOnly) q.set("paymentsOnly", "true"); // cash basis — income when received, expenses when paid
@@ -410,65 +404,67 @@ export async function fetchProfitAndLoss(accessToken: string, tenantId: string, 
   });
   if (!res.ok) throw new Error(`Xero P&L ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as any;
-  const report = data.Reports?.[0];
-  const rows = report?.Rows ?? [];
-
-  // Header → month per column (order as returned; we sort ascending at the end).
-  const header = rows.find((r: any) => r.RowType === "Header");
-  const colMonths: (string | null)[] = (header?.Cells ?? []).slice(1).map((c: any) => monthFromHeader(String(c.Value ?? "")));
-
-  const incomeRows: PnLRow[] = [];
-  const cosRows: PnLRow[] = [];
-  const opexRows: PnLRow[] = [];
-  let incomeTotal: number[] | null = null;
-  let cosTotal: number[] | null = null;
-  let opexTotal: number[] | null = null;
-
+  const rows = data.Reports?.[0]?.Rows ?? [];
+  const out: PnLMonth = { income: new Map(), cos: new Map(), opex: new Map(), incomeTotal: null, cosTotal: null, opexTotal: null };
   for (const sec of rows) {
     if (sec.RowType !== "Section") continue;
     const title = String(sec.Title ?? "");
-    let bucket: PnLRow[] | null = null;
-    if (/cost of sales/i.test(title)) bucket = cosRows;
-    else if (/operating expense|less expense|expenses/i.test(title)) bucket = opexRows;
-    else if (/income|revenue|sales|turnover/i.test(title)) bucket = incomeRows;
+    let bucket: Map<string, number> | null = null;
+    if (/cost of sales/i.test(title)) bucket = out.cos;
+    else if (/operating expense|less expense|expenses/i.test(title)) bucket = out.opex;
+    else if (/income|revenue|sales|turnover/i.test(title)) bucket = out.income;
     for (const r of sec.Rows ?? []) {
       const cells = r.Cells ?? [];
       const name = String(cells[0]?.Value ?? "");
-      const values = cells.slice(1).map((c: any) => pnlNum(c.Value));
-      if (r.RowType === "Row" && bucket) bucket.push({ name, values });
+      const value = pnlNum(cells[1]?.Value);
+      if (r.RowType === "Row" && bucket) bucket.set(name, (bucket.get(name) ?? 0) + value);
       if (r.RowType === "SummaryRow") {
-        if (/^total (income|revenue|sales|trading income)/i.test(name)) incomeTotal = values;
-        else if (/^total cost of sales/i.test(name)) cosTotal = values;
-        else if (/^total (operating expenses|expenses)/i.test(name)) opexTotal = values;
+        if (/^total (income|revenue|sales|trading income)/i.test(name)) out.incomeTotal = value;
+        else if (/^total cost of sales/i.test(name)) out.cosTotal = value;
+        else if (/^total (operating expenses|expenses)/i.test(name)) out.opexTotal = value;
       }
     }
   }
-  const sumRows = (rs: PnLRow[]): number[] => {
-    const n = colMonths.length;
-    const out = new Array(n).fill(0);
-    for (const r of rs) r.values.forEach((v, i) => (out[i] += v));
-    return out;
+  return out;
+}
+
+export async function fetchProfitAndLoss(accessToken: string, tenantId: string, toDate: string, monthsCount: number, paymentsOnly = false): Promise<PnL> {
+  // One report call PER MONTH, never `periods`: Xero builds comparison
+  // periods with the base period's end DAY, so a 30-day base month silently
+  // drops the 31st of every longer month. The FY27 "journal residual"
+  // (~R272k across exactly the 31-day months) was this.
+  const [ey, em] = toDate.slice(0, 7).split("-").map(Number);
+  const months: string[] = [];
+  for (let i = monthsCount - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(ey, em - 1 - i, 1));
+    months.push(d.toISOString().slice(0, 7));
+  }
+  // Pairs only — Xero rejects bursts of concurrent report calls.
+  const parts = new Array<PnLMonth>(months.length);
+  for (let i = 0; i < months.length; i += 2) {
+    await Promise.all(
+      months.slice(i, i + 2).map(async (m, j) => {
+        parts[i + j] = await fetchPnLMonth(accessToken, tenantId, m, paymentsOnly);
+      }),
+    );
+  }
+  const assemble = (sel: (p: PnLMonth) => Map<string, number>): PnLRow[] => {
+    const names: string[] = [];
+    for (const p of parts) for (const n of sel(p).keys()) if (!names.includes(n)) names.push(n);
+    return names
+      .map((name) => ({ name, values: parts.map((p) => sel(p).get(name) ?? 0) }))
+      .filter((r) => r.values.some((v) => v !== 0));
   };
-  let months: string[] = [];
-  const order: number[] = [];
-  colMonths.forEach((m, i) => {
-    if (m) {
-      months.push(m);
-      order.push(i);
-    }
-  });
-  // sort ascending by month, remapping all value arrays
-  const perm = months.map((m, i) => ({ m, i })).sort((a, b) => (a.m < b.m ? -1 : 1));
-  const remap = (vals: number[]): number[] => perm.map((p) => vals[order[p.i]] ?? 0);
-  const finish = (rs: PnLRow[]): PnLRow[] => rs.map((r) => ({ name: r.name, values: remap(r.values) })).filter((r) => r.values.some((v) => v !== 0));
+  const totals = (sel: (p: PnLMonth) => number | null, rows: (p: PnLMonth) => Map<string, number>): number[] =>
+    parts.map((p) => sel(p) ?? [...rows(p).values()].reduce((s, v) => s + v, 0));
   return {
-    months: perm.map((p) => p.m),
-    incomeRows: finish(incomeRows),
-    cosRows: finish(cosRows),
-    opexRows: finish(opexRows),
-    incomeTotal: remap(incomeTotal ?? sumRows(incomeRows)),
-    cosTotal: remap(cosTotal ?? sumRows(cosRows)),
-    opexTotal: remap(opexTotal ?? sumRows(opexRows)),
+    months,
+    incomeRows: assemble((p) => p.income),
+    cosRows: assemble((p) => p.cos),
+    opexRows: assemble((p) => p.opex),
+    incomeTotal: totals((p) => p.incomeTotal, (p) => p.income),
+    cosTotal: totals((p) => p.cosTotal, (p) => p.cos),
+    opexTotal: totals((p) => p.opexTotal, (p) => p.opex),
   };
 }
 

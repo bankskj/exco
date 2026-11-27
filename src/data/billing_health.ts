@@ -40,7 +40,7 @@ export async function buildBillingHealth(db: D1Database): Promise<Check[]> {
           detail:
             badTie
               .map((t) => `${label(String(t.month))}: cost ${R(-Number(t.cost_diff_c))}${Math.abs(Number(t.inc_diff_c)) > 100_000 ? `, income ${R(-Number(t.inc_diff_c))}` : ""} off the P&L`)
-              .join("; ") + " — pull the manual-journal report for these months.",
+              .join("; ") + " — documents and the synced Xero P&L disagree; re-run a sync (the P&L is fetched per month since the day-31 truncation fix) and re-check.",
         },
   );
 

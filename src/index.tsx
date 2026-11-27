@@ -1432,14 +1432,20 @@ async function runXeroSync(env: Bindings): Promise<string> {
     let cashPrior: PnL | null = null;
     let accrPrior: PnL | null = null;
     let priorErr = "";
-    try {
-      cashPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, true);
-      accrPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, false);
-    } catch (e) {
-      priorErr = e instanceof Error ? e.message : "unknown";
+    // The prior FY is closed and immutable — fetch it once per fetch version
+    // (per-month calls add up; no point re-pulling 24 reports every sync).
+    const PRIOR_DONE_FLAG = `cf_prior_fy_done_${fy - 1}_permonth`;
+    if ((await getMeta(env.DB, PRIOR_DONE_FLAG)) !== "1") {
+      try {
+        cashPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, true);
+        accrPrior = await fetchProfitAndLoss(token, tenantId, priorEnd, 12, false);
+        await setMeta(env.DB, PRIOR_DONE_FLAG, "1");
+      } catch (e) {
+        priorErr = e instanceof Error ? e.message : "unknown";
+      }
+      if (priorErr) await setMeta(env.DB, "cf_prior_fy_error", priorErr);
+      else await setMeta(env.DB, "cf_prior_fy_error", "");
     }
-    if (priorErr) await setMeta(env.DB, "cf_prior_fy_error", priorErr);
-    else await setMeta(env.DB, "cf_prior_fy_error", "");
     const bucketed = (pnl: PnL | null): Map<string, { income: number; staff: number; dev: number; other: number }> => {
       const out = new Map<string, { income: number; staff: number; dev: number; other: number }>();
       if (!pnl) return out;
@@ -1606,10 +1612,18 @@ app.get("/app/finance/pnl", async (c) => {
     const tenantId = await getMeta(c.env.DB, "xero_tenant_id");
     if (!tenantId) throw new Error("No Xero organisation — reconnect");
     const priorEnd = `${Number(endMonth.slice(0, 4)) - 1}${endMonth.slice(4)}`;
-    [pnl, prior] = await Promise.all([
-      fetchProfitAndLoss(token, tenantId, lastDayISO(endMonth), monthsCount),
-      fetchProfitAndLoss(token, tenantId, lastDayISO(priorEnd), monthsCount).catch(() => null),
-    ]);
+    // Prior-year months are immutable — serve them from a meta cache so the
+    // page costs one per-month report series, not two.
+    const priorKey = `pnl_cache_${priorEnd}_${monthsCount}`;
+    const priorCached = await getMeta(c.env.DB, priorKey);
+    pnl = await fetchProfitAndLoss(token, tenantId, lastDayISO(endMonth), monthsCount);
+    if (priorCached) {
+      try { prior = JSON.parse(priorCached) as PnL; } catch { prior = null; }
+    }
+    if (!prior) {
+      prior = await fetchProfitAndLoss(token, tenantId, lastDayISO(priorEnd), monthsCount).catch(() => null);
+      if (prior) c.executionCtx.waitUntil(setMeta(c.env.DB, priorKey, JSON.stringify(prior)).catch(() => {}));
+    }
     // Keep only months inside the FY window (defensive against extra columns).
     const keep = pnl.months.map((m) => m >= startMonth && m <= endMonth);
     const filt = (vals: number[]) => vals.filter((_, i) => keep[i]);
