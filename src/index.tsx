@@ -47,6 +47,7 @@ import { ReceivablesPage, type CustomerRow } from "./views/receivables";
 import { AdminPage, DataQualityPage } from "./views/admin";
 import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
+import { buildBillingHealth } from "./data/billing_health";
 import { ActualsPage } from "./views/actuals";
 import { replaceXeroTxns, replaceSalesTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, salesReceivedInMonth } from "./data/actuals";
 // --- Client Billing & Cost Allocation (docs/client-billing.md) -------------
@@ -268,7 +269,8 @@ app.get("/app/admin/quality", async (c) => {
     lastSync: derived.lastSync,
     actualsError: actualsError || null,
   });
-  return c.html(<DataQualityPage checks={checks} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
+  const billingChecks = await buildBillingHealth(c.env.DB);
+  return c.html(<DataQualityPage checks={[...checks, ...billingChecks]} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
 });
 
 // ---------- Projects (retired — replaced by Client Billing) ----------
