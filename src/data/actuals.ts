@@ -1,4 +1,5 @@
 import type { XeroTxn } from "../lib/xero";
+import { addMonths } from "../lib/period";
 
 export type ActualTxn = {
   id: string;
@@ -55,19 +56,48 @@ export async function listOpenSales(db: D1Database): Promise<OpenSale[]> {
 }
 
 /**
- * Open invoices by expected payment month, excl VAT (the outstanding share of
- * the invoice's ex-VAT value). Overdue — or missing a due date — lands in the
- * current month: it is owed now.
+ * Open invoices by expected payment month, at the BANK value (incl VAT —
+ * that is what the customer transfers). Overdue — or missing a due date —
+ * is cash expected NEXT month: it was earned in a past month and clearly
+ * didn't arrive on time, so the soonest honest expectation is next month.
  */
 export function openSalesByMonth(rows: OpenSale[], currentMonth: string): Map<string, number> {
+  const nextMonth = addMonths(currentMonth, 1);
   const out = new Map<string, number>();
   for (const r of rows) {
     const due = (r.due_date ?? r.txn_date).slice(0, 7);
-    const month = due < currentMonth ? currentMonth : due;
-    const excl = r.total ? r.amount_due * (r.sub_total / r.total) : r.amount_due;
-    out.set(month, (out.get(month) ?? 0) + excl);
+    const month = due < currentMonth ? nextMonth : due;
+    out.set(month, (out.get(month) ?? 0) + r.amount_due);
   }
   return out;
+}
+
+/**
+ * Cash received on sales invoices, by month, at the bank value (incl VAT):
+ * dated payments where Xero returned them, else the paid amount of invoices
+ * on their fully-paid date. Covers every synced month, including the part of
+ * the current month that has already happened.
+ */
+export async function receiptsByMonth(db: D1Database): Promise<Map<string, number>> {
+  const { results } = await db
+    .prepare("SELECT total, amount_due, paid_on, payments FROM xero_txns WHERE kind = 'sale' AND status IN ('AUTHORISED','PAID') AND (paid_on IS NOT NULL OR payments IS NOT NULL)")
+    .all<{ total: number; amount_due: number; paid_on: string | null; payments: string | null }>();
+  const out = new Map<string, number>();
+  const add = (m: string, v: number) => out.set(m, (out.get(m) ?? 0) + v);
+  for (const r of results ?? []) {
+    const list: { date: string; amount: number }[] = r.payments ? (() => { try { return JSON.parse(r.payments!); } catch { return []; } })() : [];
+    if (list.length) for (const p of list) add(p.date.slice(0, 7), p.amount);
+    else if (r.paid_on) add(r.paid_on.slice(0, 7), r.total - r.amount_due);
+  }
+  return out;
+}
+
+/** Total bank outflow (incl VAT) per month: supplier bills plus spend money. */
+export async function bankOutByMonth(db: D1Database): Promise<Map<string, number>> {
+  const { results } = await db
+    .prepare("SELECT substr(txn_date, 1, 7) AS m, SUM(total) AS t FROM xero_txns WHERE kind IN ('bill','spend') GROUP BY m")
+    .all<{ m: string; t: number }>();
+  return new Map((results ?? []).map((r) => [r.m, r.t]));
 }
 
 /**

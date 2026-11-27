@@ -49,7 +49,7 @@ import { buildSnapshot, type Snapshot } from "./lib/metrics";
 import { buildQualityReport } from "./lib/quality";
 import { buildBillingHealth } from "./data/billing_health";
 import { ActualsPage } from "./views/actuals";
-import { replaceXeroTxns, replaceSalesTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, salesReceivedInMonth } from "./data/actuals";
+import { replaceXeroTxns, replaceSalesTxns, listXeroTxns, vendorSpendTotals, listOpenSales, openSalesByMonth, listSalesForMatching, invoiceReplacements, receiptsByMonth, bankOutByMonth } from "./data/actuals";
 // --- Client Billing & Cost Allocation (docs/client-billing.md) -------------
 import { computePeriod } from "./lib/allocation";
 import { firstMatchingRule } from "./lib/billing_rules";
@@ -697,16 +697,57 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const recurringMonths = Math.max(RECURRING_HORIZON_MONTHS, monthsBetweenIncl(today.slice(0, 7), engineEnd));
   const projected = projectSchedules(schedules, today, recurringMonths);
   const recurringByMonth = groupByDueMonth(projected, schedules, today);
-  const openInvoices = openSalesByMonth(await listOpenSales(env.DB), today.slice(0, 7));
+  const nowM = today.slice(0, 7);
+  const openInvoices = openSalesByMonth(await listOpenSales(env.DB), nowM);
+  // Bank-true layer: receipts, outflows and staff payments as they hit the
+  // bank (incl VAT), plus VAT settlements on the eFiling calendar.
+  const [receipts, bankOut, staffPaidRows, vatRows] = await Promise.all([
+    receiptsByMonth(env.DB),
+    bankOutByMonth(env.DB),
+    env.DB.prepare("SELECT period, SUM(amount_c)/100.0 AS t FROM cost_lines WHERE employee_id IS NOT NULL AND doc_kind != 'refund' GROUP BY period").all<{ period: string; t: number }>(),
+    env.DB.prepare("SELECT period, SUM(amount_c)/100.0 AS t FROM cost_lines WHERE gl_code = '820' GROUP BY period ORDER BY period").all<{ period: string; t: number }>(),
+  ]);
+  const staffPaidByMonth = new Map((staffPaidRows.results ?? []).map((r) => [r.period, Number(r.t)]));
+  const otherByMonth = new Map<string, number>();
+  for (const [m, out] of bankOut) {
+    otherByMonth.set(m, Math.max(0, out - (sarsByMonth.get(m) ?? 0) - (staffPaidByMonth.get(m) ?? 0)));
+  }
+  // Habitual non-staff spend: average of the last 3 finished bank months, with
+  // committed repeating bills removed (they get their own line).
+  const otherBasis = [-3, -2, -1].map((i) => addMonths(nowM, i));
+  const otherForecastMonthly = Math.max(
+    0,
+    otherBasis.reduce((t, m) => t + (otherByMonth.get(m) ?? 0), 0) / otherBasis.length - recurringByMonth.billRunRate,
+  );
+  // VAT settlements run bimonthly: keep the parity of the last real payment,
+  // put the live VAT-control balance on the next due month, then the recent
+  // average. PAYE is inside payroll gross and never forecast here.
+  const vatPays = (vatRows.results ?? []).map((r) => ({ period: r.period, t: Number(r.t) }));
+  const sarsPlan = new Map<string, number>();
+  if (vatPays.length) {
+    const lastVat = vatPays[vatPays.length - 1].period;
+    const vatAvg = vatPays.slice(-3).reduce((t, r) => t + r.t, 0) / Math.min(3, vatPays.length);
+    const vatOwing = Number((await getMeta(env.DB, "vat_owing")) ?? 0) || vatAvg;
+    const idx = (m: string) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7));
+    let first = true;
+    for (let k = 1; k <= recurringMonths + 2; k++) {
+      const m = addMonths(lastVat, k);
+      if ((idx(m) - idx(lastVat)) % 2 !== 0) continue;
+      if (m < nowM) continue;
+      sarsPlan.set(m, first ? vatOwing : vatAvg);
+      first = false;
+    }
+  }
+  const bank: import("./lib/cashflow_engine").CfBank = { otherByMonth, otherForecastMonthly, staffPaidByMonth, sarsPlan };
   const scheduled: import("./lib/cashflow_engine").CfScheduled = {
     income: recurringByMonth.income,
     bills: recurringByMonth.bills,
     incomeRunRate: recurringByMonth.incomeRunRate,
     billRunRate: recurringByMonth.billRunRate,
     openInvoices,
-    received: new Map([[today.slice(0, 7), await salesReceivedInMonth(env.DB, today.slice(0, 7))]]),
-    coveredFrom: today.slice(0, 7),
-    coveredThrough: addMonths(today.slice(0, 7), recurringMonths - 1),
+    received: receipts,
+    coveredFrom: nowM,
+    coveredThrough: addMonths(nowM, recurringMonths - 1),
   };
   // Until the first sync after deploy the schedules table is empty: keep the
   // trend estimate for income rather than showing a collapsed forecast.
@@ -714,7 +755,7 @@ async function loadDerived(env: Bindings, basis: "cash" | "accrual" = "cash") {
   const actualsForBasis = basis === "cash"
     ? actuals
     : new Map([...actuals.entries()].map(([m, a]) => [m, { ...a, income: a.income_accr, staff: a.staff_accr, dev: a.dev_accr, other: a.other_accr }]));
-  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor, repeatingSynced ? scheduled : null);
+  const cf = buildDerivedCashflow(actualsForBasis, payrollByMonth, manualMonthly, settings, overrides, adjRows, basis === "cash" ? sarsByMonth : new Map(), activeCtcFor, repeatingSynced ? scheduled : null, repeatingSynced && basis === "cash" ? bank : null);
   // Collections gap: invoiced (accrual) vs received (cash) per complete month,
   // plus invoice-cohort truth: how much of that month's billing is unpaid TODAY.
   const debtors = await listCfDebtors(env.DB);

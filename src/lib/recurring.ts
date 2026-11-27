@@ -94,16 +94,16 @@ export function projectSchedules(
   return out.sort((a, b) => (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0));
 }
 
-/** Monthly run-rate (excl VAT) of a schedule — used to net it out of trend forecasts. */
+/** Monthly run-rate (incl VAT — bank value) of a schedule. */
 export function monthlyRate(s: XeroRepeatingSchedule): number {
   const months = s.unit === "WEEKLY" ? (7 * s.period) / 30.436875 : s.period;
-  return s.sub_total / months;
+  return s.total / months;
 }
 
 export type RecurringByMonth = {
   income: Map<string, number>; // approved sales templates, by due month
   bills: Map<string, number>; // committed recurring bills, by due month
-  incomeRunRate: number; // monthly equivalent of live sales schedules
+  incomeRunRate: number; // monthly equivalent of live sales schedules (incl VAT)
   billRunRate: number;
 };
 
@@ -112,8 +112,9 @@ export function groupByDueMonth(projected: ProjectedInvoice[], schedules: XeroRe
   const add = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
   for (const p of projected) {
     const month = p.dueDate.slice(0, 7);
-    if (p.type === "ACCREC") add(r.income, month, p.amount);
-    else add(r.bills, month, p.amount);
+    // Bank values: the customer pays (and we pay) the VAT-inclusive total.
+    if (p.type === "ACCREC") add(r.income, month, p.total);
+    else add(r.bills, month, p.total);
   }
   for (const s of schedules) {
     if (!s.next_date || s.status === "DRAFT" || (s.end_date && s.end_date < today)) continue;

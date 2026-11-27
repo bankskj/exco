@@ -9,7 +9,7 @@ import { lineChart, comboBars } from "../lib/charts";
 import { FinanceTabs } from "./income";
 
 const srcLabel = (s: string): string =>
-  s === "none" ? "—" : s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : "avg";
+  s === "none" ? "—" : s === "manual" ? "override" : s === "yoy" ? "YoY" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : s === "bank" ? "bank" : "avg";
 
 const Kpi: FC<{ label: string; value: string; sub?: string; tone?: string; info?: string; badge?: "actual" | "forecast" | "estimate" | "manual" }> = ({ label, value, sub, tone, info, badge }) => (
   <div class="kpi">
@@ -139,7 +139,7 @@ export const CashLiquidityPage: FC<{
               <thead>
                 <tr>
                   <th style="text-align:left">Month</th><th title="Actual months: cash received. Forecast months: manual other income, plus the trend estimate before the current month">Cash received / other</th><th>People paid</th>
-                  <th>Other paid</th><th>SARS (tax)</th><th>Recurring (manual)</th><th>Recurring invoices</th><th title="Unpaid invoices by due date, plus payments already received in the current month">Open / received</th><th>Adjustments</th><th>Net movement</th><th>Closing cash</th><th></th>
+                  <th>Other paid</th><th>SARS (tax)</th><th>Recurring (manual)</th><th>Recurring invoices</th><th title="Unpaid invoices by due date at bank value (incl VAT) — overdue expected next month — plus payments already received this month">Open / received</th><th>Adjustments</th><th>Net movement</th><th>Closing cash</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -149,12 +149,12 @@ export const CashLiquidityPage: FC<{
                     <td class="num">{formatZAR(c.income)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.incomeSrc)}</span> : null}</td>
                     <td class="num">{formatZAR(c.people)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.peopleSrc)}</span> : null}</td>
                     <td class="num">{formatZAR(c.other)}{c.isForecast ? <span class="cellhint"> {srcLabel(c.otherSrc)}</span> : null}</td>
-                    <td class="num">{formatZAR(c.sars)}{c.isForecast ? <span class="cellhint"> avg</span> : null}</td>
+                    <td class="num">{formatZAR(c.sars)}{c.isForecast ? <span class="cellhint"> VAT due</span> : null}</td>
                     <td class="num">{formatZAR(c.recurring)}</td>
-                    <td class={`num ${c.recIncome - c.recBills < 0 ? "neg" : ""}`} title="Xero repeating invoices less repeating bills, by due date">
+                    <td class={`num ${c.recIncome - c.recBills < 0 ? "neg" : ""}`} title="Xero repeating invoices less repeating bills, by due date, at bank value (incl VAT)">
                       {c.recIncome || c.recBills ? <a href="/app/finance/recurring">{formatZAR(c.recIncome - c.recBills)}</a> : "—"}
                     </td>
-                    <td class="num" title="Unpaid Xero sales invoices by due date, plus payments already received this month">
+                    <td class="num" title="Unpaid Xero sales invoices by due date (incl VAT; overdue expected next month), plus payments already received this month">
                       {c.openIncome + c.receivedIncome ? <a href="/app/finance/receivables">{formatZAR(c.openIncome + c.receivedIncome)}</a> : "—"}
                     </td>
                     <td class={`num ${c.adjIncome - c.adjCost < 0 ? "neg" : ""}`}>{c.adjIncome || c.adjCost ? formatZAR(c.adjIncome - c.adjCost) : "—"}</td>

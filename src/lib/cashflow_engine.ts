@@ -11,7 +11,7 @@ import { addMonths, rangeInclusive, monthsBetween, fiscalYearOf } from "./period
 import type { CfActual } from "../data/cashflow";
 import type { CFSettings } from "./forecast";
 
-export type CfSource = "pnl" | "payroll" | "ctc" | "yoy" | "avg" | "manual" | "none";
+export type CfSource = "pnl" | "payroll" | "ctc" | "yoy" | "avg" | "manual" | "none" | "bank";
 
 export type DerivedColumn = {
   month: string;
@@ -52,12 +52,30 @@ export type CfAdjustmentRow = { id: string; name: string; kind: "income" | "cost
 export type CfScheduled = {
   income: Map<string, number>;
   openInvoices: Map<string, number>;
-  received: Map<string, number>; // month → cash already received on invoices (the current month)
+  received: Map<string, number>; // month → cash received on invoices (every synced month, incl VAT)
   bills: Map<string, number>;
   incomeRunRate: number;
   billRunRate: number;
   coveredFrom: string; // first month the projection covers — the current month (YYYY-MM)
   coveredThrough: string; // last month the projection fully covers (YYYY-MM)
+};
+
+/**
+ * Bank-true layer: with this provided, every month after the books boundary is
+ * built from money as it moves at the bank (incl VAT) instead of P&L trends —
+ * gap months (boundary → today) from actual receipts/payments, forecast months
+ * from invoice projections, a committed-spend average, and VAT settlements on
+ * the eFiling calendar (PAYE lives inside payroll gross, never here).
+ */
+export type CfBank = {
+  /** Actual non-staff, non-SARS bank outflow per month (incl VAT). */
+  otherByMonth: Map<string, number>;
+  /** Forecast monthly committed+habitual other spend (incl VAT, repeating bills already removed). */
+  otherForecastMonthly: number;
+  /** Actual staff payments (EFTs) per month — replaces register gross in gap months. */
+  staffPaidByMonth: Map<string, number>;
+  /** VAT settlements planned on the eFiling calendar for forecast months. */
+  sarsPlan: Map<string, number>;
 };
 
 export type DerivedScenario = {
@@ -100,6 +118,7 @@ export function buildDerivedCashflow(
   // (per month, so future-dated leavers count until their last paid month).
   activeCtcFor: (month: string) => number = () => 0,
   scheduled: CfScheduled | null = null,
+  bank: CfBank | null = null,
 ): DerivedCashflow {
   const boundary = s.actuals_through; // books complete through (inclusive)
   // Always cover the boundary's whole fiscal year, even when the balance is
@@ -163,10 +182,13 @@ export function buildDerivedCashflow(
     } else {
       const ov = overrides.get(month) ?? {};
       const lastYear = actuals.get(addMonths(month, -12));
+      const isGap = scheduled != null && month < scheduled.coveredFrom; // books boundary → today
       if (ov.income != null) { income = ov.income; incomeSrc = "manual"; }
+      else if (bank && isGap) { income = scheduled!.received.get(month) ?? 0; incomeSrc = "bank"; } // the bank already happened
       else if (gIncome != null && lastYear && lastYear.income > 0) { income = lastYear.income * (1 + gIncome); incomeSrc = "yoy"; }
       else { income = incomeAvg; incomeSrc = "avg"; }
       if (ov.people != null) { people = ov.people; peopleSrc = "manual"; }
+      else if (bank && isGap && (bank.staffPaidByMonth.get(month) ?? 0) > 0) { people = bank.staffPaidByMonth.get(month)!; peopleSrc = "bank"; }
       else {
         const p = payrollByMonth.get(month) ?? 0;
         const ctcMonth = activeCtcFor(month);
@@ -175,18 +197,26 @@ export function buildDerivedCashflow(
         else { people = peopleAvg; peopleSrc = "avg"; }
       }
       if (ov.other != null) { other = ov.other; otherSrc = "manual"; }
+      else if (bank && isGap) { other = Math.max(0, bank.otherByMonth.get(month) ?? 0); otherSrc = "bank"; }
+      else if (bank && scheduled && month >= scheduled.coveredFrom) { other = bank.otherForecastMonthly; otherSrc = "bank"; }
       else if (gOther != null && lastYear && lastYear.other > 0) { other = lastYear.other * (1 + gOther); otherSrc = "yoy"; }
       else { other = otherAvg; otherSrc = "avg"; }
       if (scheduled && month >= scheduled.coveredFrom) {
-        recIncome = scheduled.income.get(month) ?? 0;
-        openIncome = scheduled.openInvoices.get(month) ?? 0;
         receivedIncome = scheduled.received.get(month) ?? 0;
+        openIncome = scheduled.openInvoices.get(month) ?? 0;
         // No income guess: only what is typed in the manual row.
         if (incomeSrc !== "manual") { income = 0; incomeSrc = "none"; }
         if (month <= scheduled.coveredThrough) {
+          recIncome = scheduled.income.get(month) ?? 0;
           recBills = scheduled.bills.get(month) ?? 0;
-          // Trend costs already include last year's recurring bills.
-          if (otherSrc !== "manual") other = Math.max(0, other - scheduled.billRunRate);
+          // Bank-mode other spend is already net of repeating bills; trend
+          // costs include last year's bills and must shed the run-rate.
+          if (otherSrc !== "manual" && otherSrc !== "bank") other = Math.max(0, other - scheduled.billRunRate);
+        } else {
+          // Beyond the projection horizon the schedules keep running: hold
+          // their run-rates instead of dropping to zero (the horizon cliff).
+          recIncome = scheduled.incomeRunRate;
+          recBills = scheduled.billRunRate;
         }
       }
       for (const row of adjustments) {
@@ -197,7 +227,15 @@ export function buildDerivedCashflow(
     }
     // Manual recurring items are by definition outside Xero — additive always.
     const recurring = recurringManualMonthly;
-    const sars = isForecast ? sarsAvg : sarsByMonth.get(month) ?? 0;
+    // SARS: actual settlements for every month the bank has seen; forecast
+    // months use the VAT eFiling calendar when the bank layer is on (PAYE sits
+    // inside payroll gross), else the old 3-month average.
+    const isGapMonth = isForecast && scheduled != null && month < scheduled.coveredFrom;
+    const sars = !isForecast || isGapMonth
+      ? sarsByMonth.get(month) ?? 0
+      : bank
+        ? bank.sarsPlan.get(month) ?? 0
+        : sarsAvg;
     const cost = people + other + recurring + sars + adjCost + recBills;
     const net = income + adjIncome + recIncome + openIncome + receivedIncome - cost;
     columns.push({ month, isForecast, income, people, other, recurring, sars, adjIncome, adjCost, recIncome, openIncome, receivedIncome, recBills, cost, net, balance: 0, incomeSrc, peopleSrc, otherSrc });

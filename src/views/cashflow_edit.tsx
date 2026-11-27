@@ -12,7 +12,7 @@ export type EntryMap = Map<string, Map<string, { amount: number; status: string 
 export type ForecastTab = "overview" | "monthly" | "assumptions";
 
 const srcLabel = (s: string): string =>
-  s === "manual" ? "MANUAL" : s === "yoy" ? "prior-year trend" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : s === "avg" ? "historical avg" : s === "none" ? "type to add" : "actual";
+  s === "manual" ? "MANUAL" : s === "yoy" ? "prior-year trend" : s === "payroll" ? "payroll" : s === "ctc" ? "payroll CTC" : s === "avg" ? "historical avg" : s === "bank" ? "bank actual" : s === "none" ? "type to add" : "actual";
 
 const SCENARIO_LABEL: Record<"base" | "best" | "worst", string> = { base: "Expected", best: "Optimistic", worst: "Conservative" };
 
@@ -209,7 +209,7 @@ export const ForecastPage: FC<{
                   <strong style="font-size:14px">Cash in</strong>
                   <ol class="muted" style="font-size:13px;margin:8px 0 0;padding-left:20px">
                     <li><a href="/app/finance/recurring">Recurring invoices</a> — Xero repeating invoices, by due date</li>
-                    <li><a href="/app/finance/receivables">Open invoices</a> — unpaid Xero sales invoices, by due date (overdue counts in the current month)</li>
+                    <li><a href="/app/finance/receivables">Open invoices</a> — unpaid Xero sales invoices by due date, at bank value incl VAT (overdue is expected next month)</li>
                     <li><a href="/app/pipeline">Deals</a> — expected payment dates on the Pipeline</li>
                     <li>Received so far — invoice payments already in the current month</li>
                     <li>Other expected income — only what you type in the grid (<span class="badge manual">MANUAL</span>)</li>
@@ -227,7 +227,7 @@ export const ForecastPage: FC<{
                     <li>People — payroll capture grid, then active-staff CTC</li>
                     <li>Committed recurring bills — Xero repeating bills, by due date</li>
                     <li>Recurring costs — tracked on the Costs tab</li>
-                    <li>Other — prior-year trend, then 3-month average; SARS at its 3-month average</li>
+                    <li>Other — average of the last 3 months’ actual bank spend (incl VAT, repeating bills carved out); SARS = VAT settlements on the eFiling calendar (PAYE sits inside Payroll)</li>
                   </ol>
                 </div>
               </div>
@@ -253,8 +253,8 @@ export const ForecastPage: FC<{
                   </thead>
                   <tbody>
                     <tr class="group"><td colspan={allMonths.length + 1}>Cash in</td></tr>
-                    <ScheduledRow title="Recurring invoices" badge="income" href="/app/finance/recurring" hint="read-only · Xero repeating invoices, by due date" pick={(c) => c.recIncome} />
-                    <ScheduledRow title="Open invoices" badge="income" href="/app/finance/receivables" hint="read-only · unpaid Xero sales invoices, by due date" pick={(c) => c.openIncome} />
+                    <ScheduledRow title="Recurring invoices" badge="income" href="/app/finance/recurring" hint="read-only · Xero repeating invoices by due date, incl VAT" pick={(c) => c.recIncome} />
+                    <ScheduledRow title="Open invoices" badge="income" href="/app/finance/receivables" hint="read-only · unpaid invoices by due date, incl VAT — overdue expected next month" pick={(c) => c.openIncome} />
                     <ScheduledRow title="Received so far" badge="income" href="/app/finance/transactions" hint="read-only · invoice payments already in this month (not yet closed)" pick={(c) => c.receivedIncome} />
                     {dealValues && dealValues.size > 0 ? (
                       <tr>
@@ -302,11 +302,11 @@ export const ForecastPage: FC<{
                     <tr class="group"><td colspan={allMonths.length + 1}>Operating costs</td></tr>
                     <OverrideRow k="other" title="Other operating costs" hint="everything except people, tax and recurring — trend less the bills run-rate" />
                     {cf.columns.some((c) => c.recBills) ? (
-                      <ScheduledRow title="Committed recurring bills" badge="cost" href="/app/finance/recurring" hint="read-only · Xero repeating bills, by due date" pick={(c) => c.recBills} />
+                      <ScheduledRow title="Committed recurring bills" badge="cost" href="/app/finance/recurring" hint="read-only · Xero repeating bills by due date, incl VAT" pick={(c) => c.recBills} />
                     ) : null}
                     <ModelRow title="Recurring (manual)" hint="tracked on the Costs tab — outside Xero" pick={(c) => c.recurring} />
                     <tr class="group"><td colspan={allMonths.length + 1}>Tax</td></tr>
-                    <ModelRow title="SARS — VAT / PAYE" hint="cash settlements to SARS; VAT is not in the P&L" pick={(c) => c.sars} tag="avg" />
+                    <ModelRow title="SARS — VAT settlements" hint="actuals, then the VAT eFiling calendar (live control balance first); PAYE is inside Payroll" pick={(c) => c.sars} tag="VAT cal" />
                     <tr class="group"><td colspan={allMonths.length + 1}>One-off adjustments</td></tr>
                     {adjCats.filter((c2) => c2.kind === "cost").map((cat) => (
                       <tr>
