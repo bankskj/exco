@@ -2549,7 +2549,9 @@ app.get("/app/clients/export.csv", async (c) => {
 
 // ---- Client tracker + project view -------------------------------------------
 
-const viewToggle = (c: any, key: string): boolean => c.req.query(key) !== "0";
+// Overhead and carry are OFF by default on every client page (?oh=1 / ?cy=1
+// switches them on) — the default read is pure client economics.
+const viewToggle = (c: any, key: string): boolean => c.req.query(key) === "1";
 
 app.get("/app/clients/:id", async (c) => {
   const db = c.env.DB;
