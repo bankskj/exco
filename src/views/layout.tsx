@@ -182,8 +182,10 @@ a.subnav { margin-right: 14px; font-weight: 600; }
 .seg.active { background: var(--accent); color: #fff; }
 
 /* Print / Export PDF: re-skin the dark theme to paper via the CSS variables. */
+.printonly { display: none; }
 @page { size: A4 landscape; margin: 10mm; }
 @media print {
+  .printonly { display: block; break-before: page; }
   :root { --bg: #fff; --panel: #fff; --panel-2: #f1f3f5; --border: #d0d5db; --text: #111; --muted: #555; --shadow: none; }
   html { color-scheme: light; }
   body { background: #fff; color: #111; }

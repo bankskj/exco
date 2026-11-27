@@ -378,6 +378,106 @@ export const ClientsSummaryPage: FC<ClientsSummaryPageProps> = ({
                 })()
               ) : null}
             </div>
+
+            {/* Print-only ledgers: the PDF export carries the full staff and
+                expense detail behind the summary, so the report stands alone. */}
+            <div class="card printonly">
+              <h3>People ledger — {periodLabel}</h3>
+              {(() => {
+                const map = new Map<string, { name: string; totalC: number; estimated: boolean; alloc: { client: string; amountC: number }[] }>();
+                for (const cl of result.clients)
+                  for (const p of cl.peopleByStaff) {
+                    const cur = map.get(p.employeeId) ?? { name: p.name, totalC: 0, estimated: false, alloc: [] };
+                    cur.totalC += p.amountC;
+                    cur.estimated = cur.estimated || p.estimated;
+                    cur.alloc.push({ client: cl.shortName ?? cl.name, amountC: p.amountC });
+                    map.set(p.employeeId, cur);
+                  }
+                const rows = [...map.values()].sort((a, b) => b.totalC - a.totalC);
+                const totalC = rows.reduce((s, r) => s + r.totalC, 0);
+                return (
+                  <>
+                    <table class="grid">
+                      <thead>
+                        <tr>
+                          <th style="text-align:left">Staff</th>
+                          <th>Period cost</th>
+                          <th style="text-align:left">Source</th>
+                          <th style="text-align:left">Split across clients</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr>
+                            <td style="text-align:left">{r.name}</td>
+                            <td class="num">{R(r.totalC)}</td>
+                            <td style="text-align:left">{r.estimated ? "payroll estimate" : "paid"}</td>
+                            <td style="text-align:left;white-space:normal">
+                              {r.alloc
+                                .map((a) => `${a.client} ${R(a.amountC)}${r.totalC !== 0 ? ` (${Math.round((a.amountC / r.totalC) * 100)}%)` : ""}`)
+                                .join(" · ")}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr style="font-weight:700">
+                          <td style="text-align:left">Total allocated to clients</td>
+                          <td class="num">{R(totalC)}</td>
+                          <td colspan={2}></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p class="muted" style="font-size:10px;margin:6px 0 0">
+                      Staff allocated to overhead sit inside the shared overhead pool of {R(result.poolC)}, recovered across clients by {result.overheadBasis === "revenue" ? "revenue share" : result.overheadBasis === "direct_cost" ? "direct-cost share" : "fixed shares"}.
+                    </p>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div class="card printonly">
+              <h3>Expense ledger — direct costs by payee, {periodLabel}</h3>
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th style="text-align:left">Client / payee</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.clients
+                    .filter((cl) => cl.directC !== 0 || cl.directBySupplier.length > 0)
+                    .map((cl) => (
+                      <>
+                        <tr style="font-weight:700;background:var(--panel-2)">
+                          <td style="text-align:left;white-space:normal">
+                            {cl.name}
+                            {cl.directByGroup.length ? (
+                              <span class="muted" style="font-weight:400;font-size:10px">
+                                {"  —  "}
+                                {cl.directByGroup.map((g) => `${g.group} ${R(g.amountC)}`).join(" · ")}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td class="num">{R(cl.directC)}</td>
+                        </tr>
+                        {cl.directBySupplier.map((s) => (
+                          <tr>
+                            <td style="text-align:left;padding-left:18px">{s.supplier || "(no payee on the line)"}</td>
+                            <td class="num">{R(s.amountC)}</td>
+                          </tr>
+                        ))}
+                      </>
+                    ))}
+                  <tr style="font-weight:700">
+                    <td style="text-align:left">Total direct costs</td>
+                    <td class="num">{R(result.totals.directC)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="muted" style="font-size:10px;margin:6px 0 0">
+                Shared overhead pool {R(result.poolC)} and excluded items {R(result.excludedC)} (balance-sheet, VAT, transfers) sit outside direct costs; excluded revenue {R(result.excludedRevenueC)}.
+              </p>
+            </div>
           </>
         )}
       </div>
