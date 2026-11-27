@@ -130,7 +130,27 @@ export async function buildBillingHealth(db: D1Database): Promise<Check[]> {
       : { group: GROUP, name: "Conversion accounts", status: "fail", detail: `${convo[0].n} new line(s), ${R(Number(convo[0].c))} on conversion accounts in the last 45 days — these must be re-coded in Xero.` },
   );
 
-  // 9 — Month-close progress: elapsed FY months should end up locked.
+  // 9 — Doc reconcile (E8): what the last sync removed, and lost overrides.
+  const lastRec = await db.prepare("SELECT value FROM app_meta WHERE key = 'billing_stale_removed_last'").first<{ value: string }>();
+  const orphRaw = await db.prepare("SELECT value FROM app_meta WHERE key = 'billing_orphan_overrides'").first<{ value: string }>();
+  let orphCount = 0;
+  try { orphCount = orphRaw ? JSON.parse(orphRaw.value).length : 0; } catch { orphCount = 0; }
+  if (lastRec) {
+    try {
+      const rec = JSON.parse(lastRec.value) as { at: string; rows: number; centsByMonth: Record<string, number>; carried: number; orphans: number };
+      const cents = Object.values(rec.centsByMonth ?? {}).reduce((a, b) => a + b, 0);
+      checks.push({
+        group: GROUP,
+        name: "Doc reconcile (E8)",
+        status: orphCount > 0 ? "warn" : "ok",
+        detail: `Last sync removed ${rec.rows} stale line(s) (${R(cents)}), carried ${rec.carried} manual allocation(s).${orphCount ? ` ${orphCount} orphaned override(s) need redoing — see billing_orphan_overrides.` : ""}`,
+      });
+    } catch { /* unreadable meta — skip */ }
+  } else {
+    checks.push({ group: GROUP, name: "Doc reconcile (E8)", status: "warn", detail: "No reconcile has run yet — run a sync (or the full resync below)." });
+  }
+
+  // 10 — Month-close progress: elapsed FY months should end up locked.
   const closed = await q(`SELECT COUNT(*) AS n FROM billing_periods WHERE status = 'closed' AND period IN (${marks})`, ...months);
   const elapsed = months.length - 1; // current month stays open
   const nClosed = Number(closed[0]?.n ?? 0);

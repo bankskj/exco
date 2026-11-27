@@ -26,6 +26,7 @@ import type { XeroBillingRevenueRow } from "../lib/xero";
 import { applyRuleSplits, firstMatchingRule } from "../lib/billing_rules";
 import type { MatchableLine, SplitPiece } from "../lib/billing_rules";
 import { getMeta, setMeta } from "./db";
+import { reconcileTable, type OrphanEntry } from "./sync_reconcile";
 
 export class BillingError extends Error {
   constructor(message: string, public status: number = 400) {
@@ -404,9 +405,13 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
   await ensurePeriods(db, syncStartedAt.slice(0, 7));
 
   const last = await getMeta(db, "billing_last_sync");
+  // One-off full resync (E8): fetch everything with no If-Modified-Since so
+  // the per-document reconcile can also drop rows of documents Xero deleted
+  // without ever reporting DELETED.
+  const fullResync = (await getMeta(db, "billing_full_resync_pending")) === "1";
   let sinceISO = `${FIRST_PERIOD}-01`;
   let modifiedSince: string | null = null;
-  if (last) {
+  if (last && !fullResync) {
     const d = new Date();
     d.setUTCDate(1);
     d.setUTCMonth(d.getUTCMonth() - 2); // first day of (current month − 2)
@@ -530,12 +535,25 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
   const upserts: D1PreparedStatement[] = [];
   let revCount = 0;
   let costCount = 0;
+  // E8 reconcile bookkeeping: every fetched document (even ones whose lines
+  // were all dropped or skipped) and, per table, the refs actually written.
+  const seenDocIds = new Set<string>();
+  for (const r of docs.revenue) seenDocIds.add(r.xeroDocId);
+  for (const r of docs.costs) seenDocIds.add(r.xeroDocId);
+  const keptRev = new Map<string, Set<string>>();
+  const keptCost = new Map<string, Set<string>>();
+  const keep = (m: Map<string, Set<string>>, docId: string, ref: string) => {
+    const set = m.get(docId) ?? new Set<string>();
+    set.add(ref);
+    m.set(docId, set);
+  };
   for (const r of revenueRows) {
     const period = r.txnDate.slice(0, 7);
     if (closed.has(period)) {
       bump(period);
       continue;
     }
+    keep(keptRev, r.xeroDocId, r.sourceRef);
     upserts.push(revStmt.bind(uuid(), period, r.txnDate, r.sourceRef, r.xeroDocId, r.docNumber, r.docType, r.contactName, r.xeroContactId, resolveClient(r), r.glCode, r.description, r.amountC, r.currency, r.fxRate, r.amountFxC, r.status));
     revCount++;
   }
@@ -545,10 +563,38 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
       bump(period);
       continue;
     }
+    keep(keptCost, r.xeroDocId, r.sourceRef);
     upserts.push(costStmt.bind(uuid(), period, r.txnDate, r.sourceRef, r.xeroDocId, r.docKind, r.supplier, r.reference, r.description, r.glCode, resolveEmployee(r.supplier, r.reference, r.description), r.amountC, r.currency, r.fxRate, r.amountFxC));
     costCount++;
   }
   await runBatches(db, upserts);
+
+  // E8: per-document reconcile — drop lines that vanished from their document
+  // (reissued LineItemIDs, removed/split lines, dropped balance-sheet RECEIVEs),
+  // carrying manual splits and project overrides to matching replacement lines.
+  const fetchedAll = fullResync ? new Set([...seenDocIds, ...docs.removedDocIds]) : null;
+  const recRev = await reconcileTable(db, "revenue_lines", seenDocIds, keptRev, closed, fetchedAll);
+  const recCost = await reconcileTable(db, "cost_lines", seenDocIds, keptCost, closed, fetchedAll);
+  const staleRemoved = recRev.removed + recCost.removed;
+  const staleCents = [...recRev.removedCentsByMonth.values(), ...recCost.removedCentsByMonth.values()].reduce((a, b) => a + b, 0);
+  for (const [pd, n] of [...recRev.closedSkipped, ...recCost.closedSkipped]) bump(pd, n);
+  const orphans: OrphanEntry[] = [...recRev.orphans, ...recCost.orphans];
+  if (orphans.length) {
+    const prev = (await getMeta(db, "billing_orphan_overrides")) ?? "[]";
+    let list: OrphanEntry[] = [];
+    try { list = JSON.parse(prev); } catch { list = []; }
+    await setMeta(db, "billing_orphan_overrides", JSON.stringify([...list, ...orphans].slice(-200)));
+  }
+  {
+    const byMonth: Record<string, number> = {};
+    for (const [m, c] of recRev.removedCentsByMonth) byMonth[m] = (byMonth[m] ?? 0) + c;
+    for (const [m, c] of recCost.removedCentsByMonth) byMonth[m] = (byMonth[m] ?? 0) + c;
+    await setMeta(db, "billing_stale_removed_last", JSON.stringify({ at: new Date().toISOString(), rows: staleRemoved, centsByMonth: byMonth, carried: recRev.carried + recCost.carried, orphans: orphans.length, full: fullResync }));
+  }
+  if (fullResync) {
+    await setMeta(db, "billing_full_resync_pending", "");
+    await setMeta(db, "billing_full_resync_report", JSON.stringify({ at: new Date().toISOString(), staleRemoved, staleRand: Math.round(staleCents / 100), carried: recRev.carried + recCost.carried, orphans: orphans.length }));
+  }
 
   // Removals (voided/deleted docs): never inside closed periods — those are
   // counted into the post-close warning instead.
@@ -611,7 +657,7 @@ export async function syncBillingLedgers(env: { DB: D1Database }, accessToken: s
 
   await setMeta(db, "billing_last_sync", syncStartedAt);
   await setMeta(db, "billing_sync_error", "");
-  return `billing: ${revCount} revenue line(s), ${costCount} cost line(s) upserted, ${removedCount} removed${healedCount ? `, ${healedCount} balance-sheet/refund line(s) re-filed` : ""}`;
+  return `billing: ${revCount} revenue line(s), ${costCount} cost line(s) upserted, ${removedCount} removed${staleRemoved ? `, ${staleRemoved} stale line(s) reconciled away (R ${Math.round(staleCents / 100)})` : ""}${healedCount ? `, ${healedCount} balance-sheet/refund line(s) re-filed` : ""}${fullResync ? " — FULL RESYNC" : ""}`;
 }
 
 // ---------------------------------------------------------------------------

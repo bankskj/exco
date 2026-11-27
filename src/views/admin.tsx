@@ -56,7 +56,7 @@ export const AdminPage: FC<{ xero: XeroState; msg?: string; lastSyncLabel: strin
 const ICON: Record<Check["status"], string> = { ok: "✓", warn: "⚠", fail: "✕" };
 const TONE: Record<Check["status"], string> = { ok: "pos", warn: "warn", fail: "neg" };
 
-export const DataQualityPage: FC<{ checks: Check[]; lastSyncLabel: string | null }> = ({ checks, lastSyncLabel }) => {
+export const DataQualityPage: FC<{ checks: Check[]; lastSyncLabel: string | null; msg?: string | null }> = ({ checks, lastSyncLabel, msg }) => {
   const groups = [...new Set(checks.map((c) => c.group))];
   const bad = checks.filter((c) => c.status !== "ok").length;
   return (
@@ -70,6 +70,8 @@ export const DataQualityPage: FC<{ checks: Check[]; lastSyncLabel: string | null
         <AsAt lastSync={lastSyncLabel} />
 
         <AdminTabs active="quality" />
+
+        {msg ? <div class="callout section-block">{msg}</div> : null}
 
         {groups.map((g) => (
           <div class="card section-block">
@@ -87,6 +89,18 @@ export const DataQualityPage: FC<{ checks: Check[]; lastSyncLabel: string | null
             </table>
           </div>
         ))}
+
+        <div class="card section-block" style="max-width:720px">
+          <h3>Full Xero resync — open periods</h3>
+          <p class="muted" style="font-size:13px;margin:6px 0 10px">
+            Re-fetches every FY document and reconciles each one's lines against Xero's current state: stale
+            duplicates are removed, manual splits and project overrides are carried to the replacement lines, and
+            documents deleted in Xero disappear. Closed months are never touched. Run after any large Xero clean-up.
+          </p>
+          <form method="post" action="/app/admin/billing-resync" onsubmit="return confirm('Run a full Xero resync over all open periods? This fetches every document and can take a few minutes.')">
+            <button class="btn btn-primary" type="submit">Run full resync</button>
+          </form>
+        </div>
       </div>
     </Layout>
   );

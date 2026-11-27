@@ -270,7 +270,21 @@ app.get("/app/admin/quality", async (c) => {
     actualsError: actualsError || null,
   });
   const billingChecks = await buildBillingHealth(c.env.DB);
-  return c.html(<DataQualityPage checks={[...checks, ...billingChecks]} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} />);
+  const qmsg = c.req.query("msg") ? decodeURIComponent(String(c.req.query("msg"))) : null;
+  return c.html(<DataQualityPage checks={[...checks, ...billingChecks]} lastSyncLabel={derived.lastSync ? formatDMYTime(derived.lastSync) : null} msg={qmsg} />);
+});
+
+app.post("/app/admin/billing-resync", async (c) => {
+  // E8 full resync: flag it, then run the normal full sync pipeline — the
+  // billing sync consumes the flag, fetches everything and reconciles.
+  await setMeta(c.env.DB, "billing_full_resync_pending", "1");
+  let msg: string;
+  try {
+    msg = await runXeroSync(c.env);
+  } catch (e) {
+    msg = `Resync failed: ${e instanceof Error ? e.message : "unknown"}`;
+  }
+  return c.redirect(`/app/admin/quality?msg=${encodeURIComponent(msg)}`);
 });
 
 // ---------- Projects (retired — replaced by Client Billing) ----------
