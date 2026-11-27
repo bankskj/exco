@@ -14,8 +14,13 @@ export type MatchableLine = {
 export function ruleMatches(rule: CostRule, line: MatchableLine): boolean {
   if (!rule.active) return false;
   if (rule.supplierMatch !== null) {
-    if (line.supplier === null) return false;
-    if (!line.supplier.toLowerCase().includes(rule.supplierMatch.toLowerCase())) return false;
+    // The vendor match also reads the bank narration: card payments arrive
+    // under the generic "Bank Transaction" payee with the vendor's name only
+    // in the description (same reasoning as staff payee aliases).
+    const m = rule.supplierMatch.toLowerCase();
+    const inSupplier = line.supplier !== null && line.supplier.toLowerCase().includes(m);
+    const inDescription = line.description !== null && line.description.toLowerCase().includes(m);
+    if (!inSupplier && !inDescription) return false;
   }
   if (rule.descriptionMatch !== null) {
     if (line.description === null) return false;

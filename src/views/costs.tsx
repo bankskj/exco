@@ -450,7 +450,7 @@ export const CostRulesPage: FC<CostRulesPageProps> = ({ rules, editing, projects
             <div class="formgrid">
               <div><label>Name</label><input type="text" name="name" value={editing.name} required /></div>
               <div><label>Priority</label><input type="number" name="priority" value={String(editing.priority)} /></div>
-              <div><label>Supplier contains</label><input type="text" name="supplier_match" value={editing.supplierMatch ?? ""} /></div>
+              <div><label>Vendor contains <span class="muted" style="font-weight:400">(payee or bank narration)</span></label><input type="text" name="supplier_match" value={editing.supplierMatch ?? ""} /></div>
               <div><label>Description contains</label><input type="text" name="description_match" value={editing.descriptionMatch ?? ""} /></div>
               <div>
                 <label>Account code</label>
